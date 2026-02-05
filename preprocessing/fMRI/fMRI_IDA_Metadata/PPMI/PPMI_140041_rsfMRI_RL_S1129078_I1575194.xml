@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>086</siteKey>
+ <subject>
+  <subjectIdentifier>140041</subjectIdentifier>
+  <researchGroup>PD</researchGroup>
+  <subjectSex>F</subjectSex>
+  <visit>
+   <visitIdentifier>Baseline</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">6.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>204314</studyIdentifier>
+   <subjectAge>55.61</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>40.0</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1129078</seriesIdentifier>
+    <modality>fMRI</modality>
+    <dateAcquired>2022-04-01</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1575194</imageUID>
+    <description>rsfMRI_RL</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">GE MEDICAL SYSTEMS</protocol>
+     <protocol term="Mfg Model">SIGNA Architect</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Pulse Sequence">EP/GR</protocol>
+     <protocol term="TE">30.0</protocol>
+     <protocol term="TR">2500.0</protocol>
+     <protocol term="Flip Angle">80.0</protocol>
+     <protocol term="Matrix X">64.0</protocol>
+     <protocol term="Matrix Y">64.0</protocol>
+     <protocol term="Slices">9600.0</protocol>
+     <protocol term="Pixel Spacing X">3.5</protocol>
+     <protocol term="Pixel Spacing Y">3.5</protocol>
+     <protocol term="Slice Thickness">3.5</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

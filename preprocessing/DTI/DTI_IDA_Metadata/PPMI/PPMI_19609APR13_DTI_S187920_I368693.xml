@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>034</siteKey>
+ <subject>
+  <subjectIdentifier>19609APR13</subjectIdentifier>
+  <researchGroup>Phantom</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Screening</visitIdentifier>
+  </visit>
+  <study>
+   <studyIdentifier>58107</studyIdentifier>
+   <subjectAge>17.0</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>90.7185</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>187920</seriesIdentifier>
+    <modality>DTI</modality>
+    <dateAcquired>2013-04-09</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>368693</imageUID>
+    <description>DTI</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">Verio</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Acquisition Type">2D</protocol>
+     <protocol term="TR">13500.0</protocol>
+     <protocol term="TE">88.0</protocol>
+     <protocol term="Flip Angle">90.0</protocol>
+     <protocol term="Slice Thickness">2.0</protocol>
+     <protocol term="Matrix X">1044.0</protocol>
+     <protocol term="Matrix Y">1044.0</protocol>
+     <protocol term="Matrix Z">65.0</protocol>
+     <protocol term="Pixel Size X">1.98276</protocol>
+     <protocol term="Pixel Size Y">1.98276</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="Gradient Directions">64.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

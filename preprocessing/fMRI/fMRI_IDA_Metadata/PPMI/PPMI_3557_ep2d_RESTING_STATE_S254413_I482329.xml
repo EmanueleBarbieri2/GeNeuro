@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>088</siteKey>
+ <subject>
+  <subjectIdentifier>3557</subjectIdentifier>
+  <researchGroup>PD</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Month 48</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">6.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>75127</studyIdentifier>
+   <subjectAge>63.19</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>103.0</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>254413</seriesIdentifier>
+    <modality>fMRI</modality>
+    <dateAcquired>2015-02-24</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>482329</imageUID>
+    <description>ep2d_RESTING_STATE</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">TrioTim</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="TE">25.0</protocol>
+     <protocol term="TR">2400.0</protocol>
+     <protocol term="Flip Angle">80.0</protocol>
+     <protocol term="Matrix X">476.0</protocol>
+     <protocol term="Matrix Y">462.0</protocol>
+     <protocol term="Slices">210.0</protocol>
+     <protocol term="Pixel Spacing X">3.29412</protocol>
+     <protocol term="Pixel Spacing Y">3.29412</protocol>
+     <protocol term="Slice Thickness">3.3</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

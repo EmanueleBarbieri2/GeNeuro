@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>040</siteKey>
+ <subject>
+  <subjectIdentifier>57738</subjectIdentifier>
+  <researchGroup>Prodromal</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Month 48</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">1.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>183425</studyIdentifier>
+   <subjectAge>66.28</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>82.6</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1088848</seriesIdentifier>
+    <modality>fMRI</modality>
+    <dateAcquired>2021-10-07</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1524608</imageUID>
+    <description>RESTING STATE fMRI FAT SHIFT LEFT</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">Philips Medical Systems</protocol>
+     <protocol term="Mfg Model">Ingenia</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Pulse Sequence">GR</protocol>
+     <protocol term="TE">30.001</protocol>
+     <protocol term="TR">2500.00024</protocol>
+     <protocol term="Flip Angle">80.0</protocol>
+     <protocol term="Matrix X">64.0</protocol>
+     <protocol term="Matrix Y">64.0</protocol>
+     <protocol term="Slices">9600.0</protocol>
+     <protocol term="Pixel Spacing X">3.5</protocol>
+     <protocol term="Pixel Spacing Y">3.5</protocol>
+     <protocol term="Slice Thickness">3.5</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

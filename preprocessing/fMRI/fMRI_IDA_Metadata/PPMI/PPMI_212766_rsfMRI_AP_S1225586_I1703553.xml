@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>403</siteKey>
+ <subject>
+  <subjectIdentifier>212766</subjectIdentifier>
+  <researchGroup>PD</researchGroup>
+  <subjectSex>F</subjectSex>
+  <visit>
+   <visitIdentifier>Baseline</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">0.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>236307</studyIdentifier>
+   <subjectAge>80.23</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>64.0</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1225586</seriesIdentifier>
+    <modality>fMRI</modality>
+    <dateAcquired>2023-03-27</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1703553</imageUID>
+    <description>rsfMRI_AP</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">Skyra</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="TE">30.0</protocol>
+     <protocol term="TR">1000.0</protocol>
+     <protocol term="Flip Angle">58.0</protocol>
+     <protocol term="Matrix X">528.0</protocol>
+     <protocol term="Matrix Y">528.0</protocol>
+     <protocol term="Slices">10.0</protocol>
+     <protocol term="Pixel Spacing X">3.04545</protocol>
+     <protocol term="Pixel Spacing Y">3.04545</protocol>
+     <protocol term="Slice Thickness">3.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

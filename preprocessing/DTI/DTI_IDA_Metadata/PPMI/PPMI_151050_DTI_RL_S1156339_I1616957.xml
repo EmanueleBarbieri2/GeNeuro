@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>154</siteKey>
+ <subject>
+  <subjectIdentifier>151050</subjectIdentifier>
+  <researchGroup>PD</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Baseline</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">12.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>215833</studyIdentifier>
+   <subjectAge>64.24</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>73.8</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1156339</seriesIdentifier>
+    <modality>DTI</modality>
+    <dateAcquired>2022-06-24</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1616957</imageUID>
+    <description>DTI_RL</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">GE MEDICAL SYSTEMS</protocol>
+     <protocol term="Mfg Model">DISCOVERY MR750</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Acquisition Type">2D</protocol>
+     <protocol term="TR">10000.0</protocol>
+     <protocol term="TE">81.4</protocol>
+     <protocol term="Flip Angle">90.0</protocol>
+     <protocol term="Slice Thickness">2.0</protocol>
+     <protocol term="Matrix X">256.0</protocol>
+     <protocol term="Matrix Y">256.0</protocol>
+     <protocol term="Matrix Z">2800.0</protocol>
+     <protocol term="Pixel Size X">1.0</protocol>
+     <protocol term="Pixel Size Y">1.0</protocol>
+     <protocol term="Pulse Sequence">EP/SE</protocol>
+     <protocol term="Gradient Directions">32.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

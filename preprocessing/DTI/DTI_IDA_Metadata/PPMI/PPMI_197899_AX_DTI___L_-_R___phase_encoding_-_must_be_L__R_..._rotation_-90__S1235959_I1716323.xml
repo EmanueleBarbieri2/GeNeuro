@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>096</siteKey>
+ <subject>
+  <subjectIdentifier>197899</subjectIdentifier>
+  <researchGroup>Prodromal</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Baseline</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">1.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>239586</studyIdentifier>
+   <subjectAge>69.58</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>86.0</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1235959</seriesIdentifier>
+    <modality>DTI</modality>
+    <dateAcquired>2023-05-11</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1716323</imageUID>
+    <description>AX DTI   L - R  (phase encoding - must be L&gt;&gt;R ... rotation -90)</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">Prisma_fit</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Acquisition Type">2D</protocol>
+     <protocol term="TR">10700.0</protocol>
+     <protocol term="TE">87.0</protocol>
+     <protocol term="Flip Angle">90.0</protocol>
+     <protocol term="Slice Thickness">2.0</protocol>
+     <protocol term="Matrix X">1152.0</protocol>
+     <protocol term="Matrix Y">1152.0</protocol>
+     <protocol term="Matrix Z">33.0</protocol>
+     <protocol term="Pixel Size X">2.0</protocol>
+     <protocol term="Pixel Size Y">2.0</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="Gradient Directions">30.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

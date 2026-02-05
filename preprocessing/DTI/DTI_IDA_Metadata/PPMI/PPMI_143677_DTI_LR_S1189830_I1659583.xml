@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>073</siteKey>
+ <subject>
+  <subjectIdentifier>143677</subjectIdentifier>
+  <researchGroup>Prodromal</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Baseline</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">0.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>221187</studyIdentifier>
+   <subjectAge>51.41</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>92.5</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>1189830</seriesIdentifier>
+    <modality>DTI</modality>
+    <dateAcquired>2023-01-05</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>1659583</imageUID>
+    <description>DTI_LR</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">Skyra</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Acquisition Type">2D</protocol>
+     <protocol term="TR">10100.0</protocol>
+     <protocol term="TE">83.0</protocol>
+     <protocol term="Flip Angle">90.0</protocol>
+     <protocol term="Slice Thickness">2.0</protocol>
+     <protocol term="Matrix X">1152.0</protocol>
+     <protocol term="Matrix Y">1152.0</protocol>
+     <protocol term="Matrix Z">33.0</protocol>
+     <protocol term="Pixel Size X">2.0</protocol>
+     <protocol term="Pixel Size Y">2.0</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="Gradient Directions">30.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>

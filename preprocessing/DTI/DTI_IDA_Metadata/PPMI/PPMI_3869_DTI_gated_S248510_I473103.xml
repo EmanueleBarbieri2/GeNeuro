@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idaxs xmlns="http://ida.loni.usc.edu" 
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="/xsds/idaxs_2_0.xsd">
+<project xmlns="">
+ <projectIdentifier>PPMI</projectIdentifier>
+ <projectDescription>Parkinson&#039;s Progression Markers Initiative</projectDescription>
+ <siteKey>291</siteKey>
+ <subject>
+  <subjectIdentifier>3869</subjectIdentifier>
+  <researchGroup>PD</researchGroup>
+  <subjectSex>M</subjectSex>
+  <visit>
+   <visitIdentifier>Month 24</visitIdentifier>
+   <assessment name="GDSCALE">
+    <component name="GDS Total Score">
+     <assessmentScore attribute="GDTOTAL">0.0</assessmentScore>
+    </component>
+   </assessment>
+  </visit>
+  <study>
+   <studyIdentifier>74152</studyIdentifier>
+   <subjectAge>40.37</subjectAge>
+   <ageQualifier>Y</ageQualifier>
+   <weightKg>96.0</weightKg>
+   <postMortem>F</postMortem>
+   <series>
+    <seriesIdentifier>248510</seriesIdentifier>
+    <modality>DTI</modality>
+    <dateAcquired>2014-11-28</dateAcquired>
+   </series>
+   <imagingProtocol>
+    <imageUID>473103</imageUID>
+    <description>DTI_gated</description>
+    <protocolTerm>
+     <protocol term="Manufacturer">SIEMENS</protocol>
+     <protocol term="Mfg Model">Verio</protocol>
+     <protocol term="Field Strength">3.0</protocol>
+     <protocol term="Acquisition Type">2D</protocol>
+     <protocol term="TR">810.0</protocol>
+     <protocol term="TE">88.0</protocol>
+     <protocol term="Flip Angle">90.0</protocol>
+     <protocol term="Slice Thickness">2.0</protocol>
+     <protocol term="Matrix X">1044.0</protocol>
+     <protocol term="Matrix Y">1044.0</protocol>
+     <protocol term="Matrix Z">65.0</protocol>
+     <protocol term="Pixel Size X">1.98276</protocol>
+     <protocol term="Pixel Size Y">1.98276</protocol>
+     <protocol term="Pulse Sequence">EP</protocol>
+     <protocol term="Gradient Directions">64.0</protocol>
+    </protocolTerm>
+   </imagingProtocol>
+  </study>
+ </subject>
+</project>
+</idaxs>
