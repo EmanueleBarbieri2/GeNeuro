@@ -16,9 +16,9 @@ def parse_args():
     parser.add_argument('--checkpoints_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), 'checkpoints')))
     parser.add_argument('--device', default='cpu')
     # Contrastive
-    parser.add_argument('--contrastive_epochs', type=int, default=50)
-    parser.add_argument('--contrastive_batch_size', type=int, default=8)
-    parser.add_argument('--contrastive_lr', type=float, default=1e-4)
+    parser.add_argument('--contrastive_epochs', type=int, default=100)
+    parser.add_argument('--contrastive_batch_size', type=int, default=32)
+    parser.add_argument('--contrastive_lr', type=float, default=5e-4)
     # Generator
     parser.add_argument('--generator_epochs', type=int, default=30)
     parser.add_argument('--generator_lr', type=float, default=1e-3)
@@ -55,9 +55,9 @@ PROGRESSION_REGRESSOR_CKPT = os.path.join(CHECKPOINTS_DIR, 'progression_regresso
 def run_contrastive():
     cmd = [
         sys.executable, 'model/contrastive/train.py',
-        '--epochs', str(args.contrastive_epochs),
-        '--batch_size', str(args.contrastive_batch_size),
-        '--lr', str(args.contrastive_lr),
+        '--epochs', str(args.contrastive_epochs),           # Uses your CLI arg
+        '--batch_size', str(args.contrastive_batch_size),   # Fixed: passes updated batch size
+        '--lr', str(args.contrastive_lr),                   # Fixed: passes updated LR
         '--out_encoders', ENCODER_CKPT,
         '--out_embeddings', EMBEDDINGS_PATH,
         '--data_root', DATA_ROOT,

@@ -1,102 +1,103 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GraphConv
-from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.nn import GINEConv, GCNConv, global_max_pool
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        # Using Kaiming Normal to keep variance high in deep layers
+        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+
+class MRIEncoder(nn.Module):
+    def __init__(self, input_dim=3, hidden_dim=128, embed_dim=1024, num_nodes=113):
+        super().__init__()
+        # 1. Feature Scaling per ROI
+        self.roi_scaler = nn.Parameter(torch.ones(num_nodes, input_dim))
+        
+        # 2. Independent Node Processing
+        self.node_net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GroupNorm(8, hidden_dim), # GroupNorm works better than LayerNorm for high similarity
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        self.projection = nn.Sequential(
+            nn.Linear(hidden_dim, 512),
+            nn.BatchNorm1d(512, affine=True, track_running_stats=False), # Force variance
+            nn.ReLU(),
+            nn.Linear(512, embed_dim)
+        )
+        self.apply(init_weights)
+
+    def forward(self, data):
+        x, batch = data.x, data.batch
+        num_graphs = batch.max().item() + 1
+        
+        # 1. Scaling to amplify node-level differences
+        scaler = self.roi_scaler.repeat(num_graphs, 1)
+        x = x * scaler
+        
+        # 2. Process nodes without any graph averaging
+        x = self.node_net(x)
+        
+        # 3. Use Max Pooling to isolate specific atrophy signatures
+        z = global_max_pool(x, batch)
+        return F.normalize(self.projection(z), p=2, dim=1)
+
+class ConnectomeEncoder(nn.Module):
+    def __init__(self, hidden_dim=64, embed_dim=1024):
+        super().__init__()
+        self.node_init = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU())
+        self.edge_init = nn.Linear(1, hidden_dim)
+        
+        gin_mlp = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, hidden_dim))
+        self.conv = GINEConv(gin_mlp, edge_dim=hidden_dim)
+        
+        self.projection = nn.Sequential(
+            nn.Linear(hidden_dim, 512),
+            nn.BatchNorm1d(512, track_running_stats=False),
+            nn.ReLU(),
+            nn.Linear(512, embed_dim)
+        )
+        self.apply(init_weights)
+
+    def forward(self, data):
+        edge_index, edge_attr, batch = data.edge_index, data.edge_attr, data.batch
+        
+        # 1. Aggressive Sparsification (Top 1% strongest edges)
+        # This isolates the unique functional "fingerprint"
+        threshold = torch.quantile(edge_attr, 0.99)
+        mask = edge_attr >= threshold
+        
+        w_deg = torch.zeros((data.num_nodes, 1), device=edge_index.device)
+        w_deg.index_add_(0, edge_index[1], edge_attr.view(-1, 1) if edge_attr.dim()==1 else edge_attr)
+        x = self.node_init(w_deg)
+
+        edge_emb = self.edge_init(edge_attr[mask].view(-1, 1))
+        # 2. Message passing with limited iterations to avoid over-smoothing
+        x = x + self.conv(x, edge_index[:, mask], edge_attr=edge_emb)
+        
+        z = global_max_pool(x, batch)
+        return F.normalize(self.projection(z), p=2, dim=1)
 
 class SPECTEncoder(nn.Module):
-    def __init__(self, input_dim=1, hidden_dim=64, embed_dim=1024):
+    # SPECT works well, keeping simple
+    def __init__(self, input_dim=1, hidden_dim=32, embed_dim=1024):
         super().__init__()
-        # Light 3-layer GCN for the 7-node graph
         self.conv1 = GCNConv(input_dim, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim * 2)
-        self.conv3 = GCNConv(hidden_dim * 2, hidden_dim * 4)
-        
-        # Project to latent space
         self.projection = nn.Sequential(
-            nn.Linear(hidden_dim * 4, 512),
+            nn.Linear(hidden_dim, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(512, embed_dim) # Output: 1024
+            nn.Linear(256, embed_dim)
         )
+        self.apply(init_weights)
 
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
-        
         x = F.relu(self.conv1(x, edge_index))
-        x = F.relu(self.conv2(x, edge_index))
-        x = F.relu(self.conv3(x, edge_index))
-        
-        # Pool node features into a single graph vector
-        x = global_mean_pool(x, batch) 
-        
-        # Project to NeuroBind space
-        embedding = self.projection(x)
-        
-        # CRITICAL: Normalize to hypersphere for Contrastive Learning
-        return F.normalize(embedding, p=2, dim=1)
-    
-
-
-from torch_geometric.nn import GATv2Conv
-
-class MRIEncoder(nn.Module):
-    def __init__(self, input_dim=3, hidden_dim=128, embed_dim=1024):
-        super().__init__()
-        # GATv2 allows the model to learn edge importance dynamically
-        self.conv1 = GATv2Conv(input_dim, hidden_dim, heads=4, concat=True, edge_dim=1)
-        self.conv2 = GATv2Conv(hidden_dim * 4, hidden_dim * 2, heads=4, concat=True, edge_dim=1)
-        
-        self.projection = nn.Sequential(
-            nn.Linear(hidden_dim * 8, 1024), # 8 = hidden * 2 * 4 heads/layer adjustment
-            nn.ReLU(),
-            nn.Linear(1024, embed_dim)
-        )
-
-    def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-
-        if edge_attr is not None and edge_attr.dim() == 1:
-            edge_attr = edge_attr.view(-1, 1)
-        
-        # Pass edge_attr (1 - d/d_max) to guide attention
-        x = F.relu(self.conv1(x, edge_index, edge_attr=edge_attr))
-        x = F.relu(self.conv2(x, edge_index, edge_attr=edge_attr))
-        
-        x = global_mean_pool(x, batch)
-        embedding = self.projection(x)
-        return F.normalize(embedding, p=2, dim=1)
-    
-class ConnectomeEncoder(nn.Module):
-    def __init__(self, num_nodes=113, hidden_dim=128, embed_dim=1024):
-        super().__init__()
-        # Learnable embedding for each of the 113 brain regions
-        # This replaces the missing node features
-        self.node_embedding = nn.Parameter(torch.randn(num_nodes, hidden_dim) * 0.01)
-        
-        self.conv1 = GraphConv(hidden_dim, hidden_dim * 2)
-        self.conv2 = GraphConv(hidden_dim * 2, hidden_dim * 4)
-        
-        self.projection = nn.Sequential(
-            nn.Linear(hidden_dim * 4, embed_dim),
-            nn.Linear(embed_dim, embed_dim)
-        )
-
-    def forward(self, data):
-        # Expand learnable embeddings to match batch size
-        batch_size = getattr(data, 'num_graphs', 1)
-        if not isinstance(batch_size, int) or batch_size < 1:
-            batch_size = 1
-        x = self.node_embedding.repeat(batch_size, 1)
-
-        edge_weight = data.edge_attr
-        if edge_weight is not None:
-            if edge_weight.dim() > 1:
-                edge_weight = edge_weight.view(-1)
-            # Allow negative edge weights for GraphConv
-
-        x = F.relu(self.conv1(x, data.edge_index, edge_weight=edge_weight))
-        x = F.relu(self.conv2(x, data.edge_index, edge_weight=edge_weight))
-
-        x = global_mean_pool(x, data.batch)
-        embedding = self.projection(x)
-        return F.normalize(embedding, p=2, dim=1)
+        z = global_max_pool(x, batch)
+        return F.normalize(self.projection(z), p=2, dim=1)

@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from itertools import combinations
 import time
 from model.contrastive.dataset import MultiModalDataset, multimodal_collate
+import os
 
 # Import your specific Graph Encoders
 from model.encoders import SPECTEncoder, MRIEncoder, ConnectomeEncoder 
@@ -31,7 +32,7 @@ class NeuroTrainer:
             
         self.optimizer = torch.optim.AdamW(all_params, lr=1e-4)
 
-    def contrastive_loss(self, z1, z2, temp=0.07):
+    '''def contrastive_loss(self, z1, z2, temp=0.07):
         """Symmetric InfoNCE Loss"""
         # Cosine similarity
         logits = torch.matmul(z1, z2.T) / temp
@@ -40,6 +41,25 @@ class NeuroTrainer:
         # Loss in both directions (z1->z2 and z2->z1)
         loss_a = F.cross_entropy(logits, labels)
         loss_b = F.cross_entropy(logits.T, labels)
+        return (loss_a + loss_b) / 2'''
+
+    
+    def contrastive_loss(self, z1, z2, temp=0.07):
+        """Symmetric InfoNCE Loss"""
+        # 1. L2 Normalize the embeddings first! (Crucial for preventing collapse)
+        z1 = F.normalize(z1, p=2, dim=1)
+        z2 = F.normalize(z2, p=2, dim=1)
+        
+        # 2. Compute Cosine Similarity (which is now just the dot product of normalized vectors)
+        logits = torch.matmul(z1, z2.T) / temp
+        
+        # 3. Create labels (the diagonal represents the positive pairs: patient_a == patient_a)
+        labels = torch.arange(logits.size(0)).to(self.device)
+        
+        # 4. Calculate bidirectional cross entropy
+        loss_a = F.cross_entropy(logits, labels)
+        loss_b = F.cross_entropy(logits.T, labels)
+        
         return (loss_a + loss_b) / 2
 
     def train_pair_step(self, loader, mod_a, mod_b, log_interval=20):
@@ -184,20 +204,33 @@ class NeuroTrainer:
         print(f"Saved embeddings to {output_path} (N={embeddings.size(0)})")
 
 if __name__ == "__main__":
-    # Ensure your./data folder has subfolders: SPECT, MRI, fMRI, DTI
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--embeddings_path', required=True)
-    parser.add_argument('--encoders_path', required=True)
-    parser.add_argument('--epochs', type=int, default=1)
+    # Path Arguments
     parser.add_argument('--data_root', default='./data')
     parser.add_argument('--split_path', default='data/unified_split.txt')
+    parser.add_argument('--embeddings_path', required=True)
+    parser.add_argument('--encoders_path', required=True)
+    
+    # Hyperparameters
+    parser.add_argument('--epochs', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--device', default='cpu', help="Device to use: 'cpu' or 'cuda'")
+
+    # Legacy/Redundant args (added to prevent 'Unknown Argument' errors from pipeline)
+    parser.add_argument('--out_encoders', help="Legacy flag")
+    parser.add_argument('--out_embeddings', help="Legacy flag")
+
     args, unknown = parser.parse_known_args()
 
-    # Load unified split
+    # 1. Load unified split
     def load_split(split_path):
         train_ids, val_ids = set(), set()
         mode = None
+        if not os.path.exists(split_path):
+            print(f"⚠️ Warning: Split file not found at {split_path}. Training on all available data.")
+            return None, None
         with open(split_path) as f:
             for line in f:
                 line = line.strip()
@@ -214,14 +247,22 @@ if __name__ == "__main__":
 
     train_ids, val_ids = load_split(args.split_path)
 
-    trainer = NeuroTrainer(data_root=args.data_root)
+    # 2. Initialize Trainer with CLI Arguments
+    trainer = NeuroTrainer(
+        data_root=args.data_root,
+        device=args.device,
+        batch_size=args.batch_size
+    )
+    
+    # 3. Apply the custom Learning Rate from CLI
+    for g in trainer.optimizer.param_groups:
+        g['lr'] = args.lr
 
-    # Patch run_training to use train_ids
-    orig_run_training = trainer.run_training
+    # 4. Patch run_training to use train_ids
     def run_training_with_split(self, epochs=50):
         all_mods = list(self.models.keys())
         pairs = list(combinations(all_mods, 2))
-        print(f"Starting All-Pairs Training on {self.device} (batch_size={self.batch_size})...")
+        print(f"Starting All-Pairs Training on {self.device} (batch_size={self.batch_size}, lr={args.lr})...")
         for epoch in range(epochs):
             print(f"\n--- Epoch {epoch+1}/{epochs} ---")
             epoch_loss = 0
@@ -234,23 +275,19 @@ if __name__ == "__main__":
                     dataset,
                     batch_size=self.batch_size,
                     shuffle=True,
-                    collate_fn=multimodal_collate,
-                    num_workers=self.num_workers
+                    collate_fn=multimodal_collate
                 )
-                print(
-                    f"  Pair [{mod_a}-{mod_b}] | Samples: {len(dataset)} | "
-                    f"Batches: {len(loader)}"
-                )
+                print(f"  Pair [{mod_a}-{mod_b}] | Samples: {len(dataset)} | Batches: {len(loader)}")
                 loss = self.train_pair_step(loader, mod_a, mod_b)
                 print(f"  Pair [{mod_a}-{mod_b}] | Epoch Loss: {loss:.4f}")
                 epoch_loss += loss
                 pairs_trained += 1
             avg_loss = epoch_loss / pairs_trained if pairs_trained > 0 else 0
             print(f"  > Average Epoch Loss: {avg_loss:.4f}")
-        print("Training Complete. All encoders are aligned.")
+
     trainer.run_training = run_training_with_split.__get__(trainer)
 
+    # 5. Start Training and Export
     trainer.run_training(epochs=args.epochs)
     trainer.export_embeddings(output_path=args.embeddings_path)
     torch.save({"models": {k: v.state_dict() for k, v in trainer.models.items()}}, args.encoders_path)
-    print(f"Saved encoder checkpoints to {args.encoders_path}")
