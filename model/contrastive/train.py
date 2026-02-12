@@ -7,6 +7,26 @@ import os
 from model.contrastive.dataset import MultiModalDataset, multimodal_collate
 from model.encoders import SPECTEncoder, MRIEncoder, ConnectomeEncoder 
 
+def load_split(split_path):
+    """Parses the unified_split.txt to get training IDs."""
+    train_ids = set()
+    if not os.path.exists(split_path):
+        print(f"Warning: Split file {split_path} not found. Training on ALL data.")
+        return None
+        
+    with open(split_path, 'r') as f:
+        mode = None
+        for line in f:
+            line = line.strip()
+            if line == "train_ids:":
+                mode = "train"
+            elif line == "val_ids:":
+                mode = "val"
+            elif line and not line.startswith("#"):
+                if mode == "train":
+                    train_ids.add(line)
+    return list(train_ids)
+
 class NeuroTrainer:
     def __init__(self, data_root, device='cpu', batch_size=8, num_workers=0):
         self.data_root = data_root
@@ -21,9 +41,9 @@ class NeuroTrainer:
             'DTI': ConnectomeEncoder().to(device)
         }
         
-        # ProM3E Hyperparameters from Table 7 [cite: 715]
-        self.alpha = -5.0 # Base scale parameter
-        self.beta = 5.0   # Base shift parameter
+        # ProM3E Hyperparameters from Table 7
+        self.alpha = -2.0 # Base scale parameter
+        self.beta = 2.0   # Base shift parameter
         
         all_params = []
         for model in self.models.values():
@@ -33,25 +53,25 @@ class NeuroTrainer:
 
     def prom3e_contrastive_loss(self, z_spoke, z_hub):
         """
-        Implementation of ProM3E Equation 4[cite: 162].
+        Implementation of ProM3E Equation 4.
         Uses Euclidean distances for a contrastive objective to learn intra-modal distributions.
         """
-        # 1. Normalize embeddings as ProM3E uses global normalized embeddings [cite: 108]
+        # 1. Normalize embeddings as ProM3E uses global normalized embeddings
         z_spoke = F.normalize(z_spoke, p=2, dim=1)
         z_hub = F.normalize(z_hub, p=2, dim=1)
         
-        # 2. Calculate Pairwise Euclidean Distance Matrix (N x N) [cite: 158]
+        # 2. Calculate Pairwise Euclidean Distance Matrix (N x N)
         # dists[i, j] = ||z_spoke[i] - z_hub[j]||^2
         dists = torch.cdist(z_spoke, z_hub, p=2)
         
-        # 3. Apply Scaling and Shifting (Equation 4) [cite: 162, 164]
+        # 3. Apply Scaling and Shifting (Equation 4)
         # We use a negative alpha because smaller distance should result in higher logit
         logits = self.alpha * dists + self.beta
         
         # 4. Positive pairs are on the diagonal (Patient A Spoke <-> Patient A Hub)
         labels = torch.arange(logits.size(0)).to(self.device)
         
-        # 5. Symmetric InfoNCE on distances [cite: 162]
+        # 5. Symmetric InfoNCE on distances
         loss_spoke_to_hub = F.cross_entropy(logits, labels)
         loss_hub_to_spoke = F.cross_entropy(logits.T, labels)
         
@@ -71,7 +91,7 @@ class NeuroTrainer:
             self.optimizer.zero_grad()
             z_spoke, z_hub = model_spoke(data_spoke), model_hub(data_hub)
             
-            # Apply the ProM3E Distance-based Loss [cite: 162]
+            # Apply the ProM3E Distance-based Loss
             loss = self.prom3e_contrastive_loss(z_spoke, z_hub)
             
             loss.backward()
@@ -81,7 +101,7 @@ class NeuroTrainer:
             
             if step % log_interval == 0 or step == num_batches:
                 avg_time = (time.perf_counter() - start_t) / step
-                print(f"    [{spoke}->{hub}] Batch {step}/{num_batches} | loss={loss.item():.4f}")
+                # print(f"    [{spoke}->{hub}] Batch {step}/{num_batches} | loss={loss.item():.4f}")
             
         return total_loss / num_batches if num_batches > 0 else 0
 
@@ -90,10 +110,14 @@ class NeuroTrainer:
         spokes = ['SPECT', 'fMRI', 'DTI']
         pairs = [(spoke, hub) for spoke in spokes]
         
+        if train_ids:
+            print(f"Training restricted to {len(train_ids)} subjects (Train Split).")
+        
         for epoch in range(epochs):
             print(f"\n--- Epoch {epoch+1}/{epochs} ---")
             epoch_loss, pairs_trained = 0, 0
             for spoke, current_hub in pairs:
+                # CRITICAL: Pass train_ids here to prevent leakage!
                 dataset = MultiModalDataset(self.root, [spoke, current_hub], allowed_ids=train_ids)
                 if len(dataset) == 0: continue
                     
@@ -105,12 +129,18 @@ class NeuroTrainer:
             print(f"  > Average Epoch Loss: {epoch_loss/max(pairs_trained,1):.4f}")
 
     def export_embeddings(self, output_path="embeddings.pt"):
+        # Note: We do NOT pass allowed_ids here.
+        # We want to export embeddings for ALL valid subjects (Train + Val)
+        # so the downstream tasks can use the Val subjects for evaluation.
         all_embeddings, all_labels, all_ids = [], [], []
+        
+        print("\nExporting embeddings for Downstream Tasks...")
         for mod in self.models.keys():
             model = self.models[mod]
             model.eval()
             dataset = MultiModalDataset(self.data_root, modalities=[mod])
             loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, collate_fn=multimodal_collate)
+            
             with torch.no_grad():
                 for batch in loader:
                     z = model(batch[mod].to(self.device)).detach().cpu()
@@ -118,6 +148,8 @@ class NeuroTrainer:
                     all_labels.extend([mod] * z.size(0))
                     all_ids.extend(batch['id'])
             print(f"  [export] {mod}: {len(dataset)} samples")
+            
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         torch.save({"embeddings": torch.cat(all_embeddings, dim=0), "labels": all_labels, "ids": all_ids}, output_path)
 
 if __name__ == "__main__":
@@ -126,13 +158,23 @@ if __name__ == "__main__":
     parser.add_argument('--data_root', default='./data')
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--encoders_path', required=True)
+    parser.add_argument('--split_path', default='./data/unified_split.txt') # Added argument
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--device', default='cpu')
     args, _ = parser.parse_known_args()
 
+    # Load the split to ensure isolation
+    train_ids = load_split(args.split_path)
+
     trainer = NeuroTrainer(args.data_root, args.device, args.batch_size)
-    trainer.root = args.data_root # Patch for run_training
-    trainer.run_training(epochs=args.epochs)
+    trainer.root = args.data_root 
+    
+    # Pass train_ids to the training loop
+    trainer.run_training(epochs=args.epochs, train_ids=train_ids)
+    
+    # Export everything (Train + Val) for downstream use
     trainer.export_embeddings(args.embeddings_path)
+    
+    os.makedirs(os.path.dirname(args.encoders_path), exist_ok=True)
     torch.save({"models": {k: v.state_dict() for k, v in trainer.models.items()}}, args.encoders_path)

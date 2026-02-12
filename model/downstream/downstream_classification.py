@@ -11,27 +11,40 @@ from torch.utils.data import Dataset, DataLoader
 from model.generator.generator import ProM3E_Generator
 
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
-CLASS_NAMES = ["Control", "PD", "Prodromal", "Non-PD"]
-PD_GENES = ["LRRK2", "GBA", "SNCA", "PRKN", "PINK1", "PARK7", "VPS35"]
 
-def label_from_subgroup(subgroup: str):
-    if not subgroup: return None
-    s = subgroup.upper()
-    if "SWEDD" in s: return "Non-PD"
-    if "HEALTHY CONTROL" in s or "NORMOSMIC" in s: return "Control"
-    if "SPORADIC PD" in s: return "PD"
-    for g in PD_GENES:
-        if g in s: return "PD"
-    if "RBD" in s or "HYPOSMIA" in s: return "Prodromal"
-    return None
+# CHANGED: Removed "Non-PD" (SWEDD) from the list.
+CLASS_NAMES = ["Control", "PD", "Prodromal"]
 
+# CHANGED: New logic using Cohort codes (1=PD, 2=HC, 4=Prodromal)
+def label_from_cohort(cohort_val):
+    if cohort_val is None: return None
+    try:
+        # Handle cases where cohort might be "1.0" string or integer
+        c = int(float(cohort_val))
+    except (ValueError, TypeError):
+        return None
+
+    if c == 1: return "PD"
+    if c == 2: return "Control"
+    if c == 4: return "Prodromal"
+    return None # Returns None for everything else (SWEDD, etc), effectively excluding them
+
+# CHANGED: Now looks for COHORT column instead of subgroup
 def load_csv_labels(csv_path):
     labels = {}
     with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            patno, event_id, subgroup = row.get("PATNO"), row.get("EVENT_ID"), row.get("subgroup")
+        reader = csv.DictReader(f)
+        # Auto-detect column name case (COHORT vs cohort)
+        keys = reader.fieldnames
+        cohort_key = "COHORT" if "COHORT" in keys else "cohort"
+
+        for row in reader:
+            patno, event_id = row.get("PATNO"), row.get("EVENT_ID")
+            cohort_val = row.get(cohort_key)
+            
             if not patno or not event_id: continue
-            label = label_from_subgroup(subgroup)
+            
+            label = label_from_cohort(cohort_val)
             if label: labels[f"{patno}_{event_id}"] = label
     return labels
 
@@ -72,7 +85,8 @@ class ClassDataset(Dataset):
     def __getitem__(self, idx): return self.samples[idx][2], self.samples[idx][1]
 
 class Classifier(nn.Module):
-    def __init__(self, input_dim=4100, num_classes=4):
+    # CHANGED: Default num_classes=3, matching CLASS_NAMES length
+    def __init__(self, input_dim=4100, num_classes=3):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, 512), nn.BatchNorm1d(512), nn.ReLU(), nn.Dropout(0.5),
@@ -90,6 +104,7 @@ def evaluate(model, loader, device="cpu"):
     preds, trues = torch.cat(preds), torch.cat(trues)
     
     acc = (preds == trues).float().mean().item()
+    # CHANGED: Dynamic size for confusion matrix
     conf = torch.zeros(len(CLASS_NAMES), len(CLASS_NAMES), dtype=torch.int64)
     for t, p in zip(trues, preds): conf[t, p] += 1
     recall = torch.diag(conf).float() / conf.sum(dim=1).float().clamp_min(1)
@@ -108,6 +123,8 @@ def main():
     args, _ = parser.parse_known_args()
 
     labels = load_csv_labels(args.csv_path)
+    print(f"Loaded labels for {len(labels)} subjects/events.")
+    
     embs = load_embeddings(args.embeddings_path)
     gen = ProM3E_Generator(1024)
     gen.load_state_dict(torch.load(args.generator_ckpt, map_location="cpu")["model_state"])
@@ -130,10 +147,14 @@ def main():
     train_loader = DataLoader(torch.utils.data.Subset(dataset, train_idx), batch_size=64, shuffle=True)
     val_loader = DataLoader(torch.utils.data.Subset(dataset, val_idx), batch_size=256)
 
+    # CHANGED: Dynamic weight calculation based on len(CLASS_NAMES)
+    num_classes = len(CLASS_NAMES)
     counts = Counter([dataset.samples[i][1] for i in train_idx])
-    weights = torch.tensor([len(train_idx) / (4 * counts.get(i, 1)) for i in range(4)], dtype=torch.float32).to(args.device)
+    weights = torch.tensor([len(train_idx) / (num_classes * counts.get(i, 1)) for i in range(num_classes)], dtype=torch.float32).to(args.device)
 
-    model = Classifier(4096+4).to(args.device) # REVERTED TO FULL DIM
+    # CHANGED: Initialize model with correct number of classes (3)
+    model = Classifier(4096+4, num_classes=num_classes).to(args.device)
+    
     opt = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss(weight=weights)
 
