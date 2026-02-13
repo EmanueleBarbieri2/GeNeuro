@@ -12,14 +12,12 @@ from model.generator.generator import ProM3E_Generator
 
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 
-# CHANGED: Removed "Non-PD" (SWEDD) from the list.
+# Logic using Cohort codes (1=PD, 2=HC, 4=Prodromal)
 CLASS_NAMES = ["Control", "PD", "Prodromal"]
 
-# CHANGED: New logic using Cohort codes (1=PD, 2=HC, 4=Prodromal)
 def label_from_cohort(cohort_val):
     if cohort_val is None: return None
     try:
-        # Handle cases where cohort might be "1.0" string or integer
         c = int(float(cohort_val))
     except (ValueError, TypeError):
         return None
@@ -27,23 +25,19 @@ def label_from_cohort(cohort_val):
     if c == 1: return "PD"
     if c == 2: return "Control"
     if c == 4: return "Prodromal"
-    return None # Returns None for everything else (SWEDD, etc), effectively excluding them
+    return None 
 
-# CHANGED: Now looks for COHORT column instead of subgroup
 def load_csv_labels(csv_path):
     labels = {}
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
-        # Auto-detect column name case (COHORT vs cohort)
         keys = reader.fieldnames
         cohort_key = "COHORT" if "COHORT" in keys else "cohort"
 
         for row in reader:
             patno, event_id = row.get("PATNO"), row.get("EVENT_ID")
             cohort_val = row.get(cohort_key)
-            
             if not patno or not event_id: continue
-            
             label = label_from_cohort(cohort_val)
             if label: labels[f"{patno}_{event_id}"] = label
     return labels
@@ -56,7 +50,7 @@ def load_embeddings(path):
     return by_id
 
 def hallucinate_missing_modalities(model, available, device="cpu"):
-    """REVERTED: Returns 4096D Reconstructions"""
+    """Returns 4096D Reconstructions using the generative model."""
     model.eval()
     input_tensor, mask = torch.zeros(1, 4, 1024, device=device), torch.ones(1, 4, dtype=torch.bool, device=device)
     with torch.no_grad():
@@ -76,8 +70,10 @@ class ClassDataset(Dataset):
             recon = hallucinate_missing_modalities(generator, mods, device)
             feat, mask_feat = [], []
             for mod in MOD_ORDER:
-                if mod in mods: feat.append(mods[mod]); mask_feat.append(1.0)
-                else: feat.append(recon[mod]); mask_feat.append(0.0)
+                if mod in mods: 
+                    feat.append(mods[mod]); mask_feat.append(1.0)
+                else: 
+                    feat.append(recon[mod]); mask_feat.append(0.0)
             x = torch.cat([torch.cat(feat), torch.tensor(mask_feat)])
             self.samples.append((key, CLASS_NAMES.index(label), x))
 
@@ -85,7 +81,6 @@ class ClassDataset(Dataset):
     def __getitem__(self, idx): return self.samples[idx][2], self.samples[idx][1]
 
 class Classifier(nn.Module):
-    # CHANGED: Default num_classes=3, matching CLASS_NAMES length
     def __init__(self, input_dim=4100, num_classes=3):
         super().__init__()
         self.net = nn.Sequential(
@@ -104,7 +99,6 @@ def evaluate(model, loader, device="cpu"):
     preds, trues = torch.cat(preds), torch.cat(trues)
     
     acc = (preds == trues).float().mean().item()
-    # CHANGED: Dynamic size for confusion matrix
     conf = torch.zeros(len(CLASS_NAMES), len(CLASS_NAMES), dtype=torch.int64)
     for t, p in zip(trues, preds): conf[t, p] += 1
     recall = torch.diag(conf).float() / conf.sum(dim=1).float().clamp_min(1)
@@ -119,6 +113,9 @@ def main():
     parser.add_argument('--csv_path', required=True)
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--generator_ckpt', required=True)
+    # Propagated from run_full_pipeline.py
+    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--device', default='cpu')
     args, _ = parser.parse_known_args()
 
@@ -126,8 +123,9 @@ def main():
     print(f"Loaded labels for {len(labels)} subjects/events.")
     
     embs = load_embeddings(args.embeddings_path)
-    gen = ProM3E_Generator(1024)
-    gen.load_state_dict(torch.load(args.generator_ckpt, map_location="cpu")["model_state"])
+    # Initialize with 3 layers to match verified architecture
+    gen = ProM3E_Generator(embed_dim=1024, num_layers=3).to(args.device)
+    gen.load_state_dict(torch.load(args.generator_ckpt, map_location=args.device)["model_state"])
 
     split_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'unified_split.txt'))
     train_ids, val_ids = set(), set()
@@ -147,19 +145,19 @@ def main():
     train_loader = DataLoader(torch.utils.data.Subset(dataset, train_idx), batch_size=64, shuffle=True)
     val_loader = DataLoader(torch.utils.data.Subset(dataset, val_idx), batch_size=256)
 
-    # CHANGED: Dynamic weight calculation based on len(CLASS_NAMES)
     num_classes = len(CLASS_NAMES)
     counts = Counter([dataset.samples[i][1] for i in train_idx])
     weights = torch.tensor([len(train_idx) / (num_classes * counts.get(i, 1)) for i in range(num_classes)], dtype=torch.float32).to(args.device)
 
-    # CHANGED: Initialize model with correct number of classes (3)
     model = Classifier(4096+4, num_classes=num_classes).to(args.device)
     
-    opt = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-2)
+    # Use dynamic lr from args
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss(weight=weights)
 
     best_bal_acc, best_state = 0.0, None
-    for epoch in range(30):
+    # Use dynamic epochs from args
+    for epoch in range(args.epochs):
         model.train(); total_loss = 0.0
         for x, y in train_loader:
             loss = criterion(model(x.to(args.device)), y.to(args.device))
@@ -167,8 +165,10 @@ def main():
         
         metrics = evaluate(model, val_loader, args.device)
         status = "⭐ Best!" if metrics['bal_acc'] > best_bal_acc else ""
-        if status: best_bal_acc = metrics['bal_acc']; best_state = model.state_dict()
-        print(f"Epoch {epoch+1:02d}/30 | train_loss={total_loss/len(train_loader):.4f} | val_acc={metrics['acc']:.4f} | val_bal_acc={metrics['bal_acc']:.4f} | val_macro_f1={metrics['macro_f1']:.4f} {status}")
+        if status: 
+            best_bal_acc = metrics['bal_acc']
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+        print(f"Epoch {epoch+1:02d}/{args.epochs} | train_loss={total_loss/len(train_loader):.4f} | val_bal_acc={metrics['bal_acc']:.4f} {status}")
 
     checkpoints_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'checkpoints'))
     os.makedirs(checkpoints_dir, exist_ok=True)

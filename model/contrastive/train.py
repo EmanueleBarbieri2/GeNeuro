@@ -1,180 +1,168 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import time
+import argparse
 import os
+import time
 
-from model.contrastive.dataset import MultiModalDataset, multimodal_collate
-from model.encoders import SPECTEncoder, MRIEncoder, ConnectomeEncoder 
-
-def load_split(split_path):
-    """Parses the unified_split.txt to get training IDs."""
-    train_ids = set()
-    if not os.path.exists(split_path):
-        print(f"Warning: Split file {split_path} not found. Training on ALL data.")
-        return None
-        
-    with open(split_path, 'r') as f:
-        mode = None
-        for line in f:
-            line = line.strip()
-            if line == "train_ids:":
-                mode = "train"
-            elif line == "val_ids:":
-                mode = "val"
-            elif line and not line.startswith("#"):
-                if mode == "train":
-                    train_ids.add(line)
-    return list(train_ids)
+# Core components
+from dataset import MultiModalDataset, BrainGraphAugmentor, multimodal_collate
+from model.encoders import SPECTEncoder, MRIEncoder, fMRIEncoder, DTIEncoder
 
 class NeuroTrainer:
-    def __init__(self, data_root, device='cpu', batch_size=8, num_workers=0):
+    def __init__(self, data_root, device='cpu', batch_size=32, lr=1e-4, 
+                 alpha=-2.0, beta=2.0, use_aug=True):
+        """
+        ProM3E Stage 1 Trainer: Aligns modality 'spokes' to a central 'hub'.
+        """
         self.data_root = data_root
         self.device = device
         self.batch_size = batch_size
-        self.num_workers = num_workers
         
-        self.models = {
+        # 1. Initialize Specialized Encoders
+        self.models = torch.nn.ModuleDict({
             'SPECT': SPECTEncoder().to(device),
             'MRI': MRIEncoder().to(device),
-            'fMRI': ConnectomeEncoder().to(device),
-            'DTI': ConnectomeEncoder().to(device)
-        }
+            'fMRI': fMRIEncoder().to(device),
+            'DTI': DTIEncoder().to(device)
+        })
         
-        # ProM3E Hyperparameters from Table 7
-        self.alpha = -2.0 # Base scale parameter
-        self.beta = 2.0   # Base shift parameter
+        # 2. Setup Augmentor (Toggleable via CLI)
+        if use_aug:
+            print("✨ Contrastive Augmentation: ENABLED")
+            self.augmentor = BrainGraphAugmentor(edge_mask_prob=0.15, jitter_std=0.01)
+        else:
+            print("🚫 Contrastive Augmentation: DISABLED")
+            self.augmentor = None
         
-        all_params = []
-        for model in self.models.values():
-            all_params += list(model.parameters())
-            
-        self.optimizer = torch.optim.AdamW(all_params, lr=1e-4)
+        # 3. ProM3E Hyperparameters (Equation 4)
+        self.alpha = alpha 
+        self.beta = beta   
+        self.optimizer = torch.optim.AdamW(self.models.parameters(), lr=lr)
 
-    def prom3e_contrastive_loss(self, z_spoke, z_hub):
-        """
-        Implementation of ProM3E Equation 4.
-        Uses Euclidean distances for a contrastive objective to learn intra-modal distributions.
-        """
-        # 1. Normalize embeddings as ProM3E uses global normalized embeddings
+    def prom3e_loss(self, z_spoke, z_hub):
+        """Calculates distance-based contrastive alignment logits."""
         z_spoke = F.normalize(z_spoke, p=2, dim=1)
         z_hub = F.normalize(z_hub, p=2, dim=1)
         
-        # 2. Calculate Pairwise Euclidean Distance Matrix (N x N)
-        # dists[i, j] = ||z_spoke[i] - z_hub[j]||^2
         dists = torch.cdist(z_spoke, z_hub, p=2)
-        
-        # 3. Apply Scaling and Shifting (Equation 4)
-        # We use a negative alpha because smaller distance should result in higher logit
         logits = self.alpha * dists + self.beta
-        
-        # 4. Positive pairs are on the diagonal (Patient A Spoke <-> Patient A Hub)
         labels = torch.arange(logits.size(0)).to(self.device)
         
-        # 5. Symmetric InfoNCE on distances
-        loss_spoke_to_hub = F.cross_entropy(logits, labels)
-        loss_hub_to_spoke = F.cross_entropy(logits.T, labels)
-        
-        return (loss_spoke_to_hub + loss_hub_to_spoke) / 2
+        # Symmetric InfoNCE loss
+        return (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
 
-    def train_pair_step(self, loader, spoke, hub, log_interval=20):
-        model_spoke, model_hub = self.models[spoke], self.models[hub]
-        model_spoke.train(); model_hub.train()
+    def run_training(self, epochs=100, train_ids=None):
+        # HARDCODED HUB: fMRI (Validated as best anchor via deep sweep)
+        hub_name = 'fMRI'
+        spokes = [m for m in self.models.keys() if m != hub_name]
         
-        total_loss, start_t = 0, time.perf_counter()
-        num_batches = len(loader)
-        
-        for step, batch in enumerate(loader, start=1):
-            data_spoke = batch[spoke].to(self.device)
-            data_hub = batch[hub].to(self.device)
-            
-            self.optimizer.zero_grad()
-            z_spoke, z_hub = model_spoke(data_spoke), model_hub(data_hub)
-            
-            # Apply the ProM3E Distance-based Loss
-            loss = self.prom3e_contrastive_loss(z_spoke, z_hub)
-            
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.optimizer.param_groups[0]['params'], max_norm=1.0)
-            self.optimizer.step()
-            total_loss += loss.item()
-            
-            if step % log_interval == 0 or step == num_batches:
-                avg_time = (time.perf_counter() - start_t) / step
-                # print(f"    [{spoke}->{hub}] Batch {step}/{num_batches} | loss={loss.item():.4f}")
-            
-        return total_loss / num_batches if num_batches > 0 else 0
+        # Pre-initialize loaders for efficiency
+        loaders = []
+        for spoke in spokes:
+            ds = MultiModalDataset(self.data_root, [spoke, hub_name], 
+                                    allowed_ids=train_ids, transform=self.augmentor)
+            if len(ds) > 0:
+                loaders.append((spoke, DataLoader(ds, batch_size=self.batch_size, 
+                                                 shuffle=True, collate_fn=multimodal_collate)))
 
-    def run_training(self, epochs=1, train_ids=None):
-        hub = 'MRI'
-        spokes = ['SPECT', 'fMRI', 'DTI']
-        pairs = [(spoke, hub) for spoke in spokes]
-        
-        if train_ids:
-            print(f"Training restricted to {len(train_ids)} subjects (Train Split).")
+        print(f"🚀 ProM3E Training | Hub: {hub_name} | Spokes: {spokes} | α={self.alpha}")
         
         for epoch in range(epochs):
-            print(f"\n--- Epoch {epoch+1}/{epochs} ---")
-            epoch_loss, pairs_trained = 0, 0
-            for spoke, current_hub in pairs:
-                # CRITICAL: Pass train_ids here to prevent leakage!
-                dataset = MultiModalDataset(self.root, [spoke, current_hub], allowed_ids=train_ids)
-                if len(dataset) == 0: continue
-                    
-                loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, collate_fn=multimodal_collate)
-                print(f"  Pair [{spoke}-{current_hub}] | Samples: {len(dataset)}")
-                loss = self.train_pair_step(loader, spoke, current_hub)
-                epoch_loss += loss; pairs_trained += 1
-                
-            print(f"  > Average Epoch Loss: {epoch_loss/max(pairs_trained,1):.4f}")
-
-    def export_embeddings(self, output_path="embeddings.pt"):
-        # Note: We do NOT pass allowed_ids here.
-        # We want to export embeddings for ALL valid subjects (Train + Val)
-        # so the downstream tasks can use the Val subjects for evaluation.
-        all_embeddings, all_labels, all_ids = [], [], []
-        
-        print("\nExporting embeddings for Downstream Tasks...")
-        for mod in self.models.keys():
-            model = self.models[mod]
-            model.eval()
-            dataset = MultiModalDataset(self.data_root, modalities=[mod])
-            loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, collate_fn=multimodal_collate)
+            self.models.train()
+            epoch_pair_losses = {}
+            total_loss = 0
             
-            with torch.no_grad():
+            for spoke_name, loader in loaders:
+                pair_batch_loss = 0
                 for batch in loader:
-                    z = model(batch[mod].to(self.device)).detach().cpu()
-                    all_embeddings.append(z)
-                    all_labels.extend([mod] * z.size(0))
-                    all_ids.extend(batch['id'])
-            print(f"  [export] {mod}: {len(dataset)} samples")
+                    z_spoke = self.models[spoke_name](batch[spoke_name].to(self.device))
+                    z_hub = self.models[hub_name](batch[hub_name].to(self.device))
+                    
+                    loss = self.prom3e_loss(z_spoke, z_hub)
+                    
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.models.parameters(), 1.0)
+                    self.optimizer.step()
+                    
+                    pair_batch_loss += loss.item()
+                
+                avg_pair_loss = pair_batch_loss / len(loader)
+                epoch_pair_losses[spoke_name] = avg_pair_loss
+                total_loss += avg_pair_loss
             
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        torch.save({"embeddings": torch.cat(all_embeddings, dim=0), "labels": all_labels, "ids": all_ids}, output_path)
+            # --- Detailed Alignment Logging ---
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                log_str = f"Epoch {epoch+1:03d}/{epochs} | Avg: {total_loss/len(loaders):.4f} | "
+                log_str += " | ".join([f"{s}➔f: {l:.4f}" for s, l in epoch_pair_losses.items()])
+                print(log_str)
+
+    def export_embeddings(self, output_path):
+        """Export clean embeddings (No Augmentation) for the generator stage."""
+        self.models.eval()
+        results = {"embeddings": [], "labels": [], "ids": []}
+        
+        with torch.no_grad():
+            for mod in self.models.keys():
+                ds = MultiModalDataset(self.data_root, [mod], transform=None)
+                loader = DataLoader(ds, batch_size=self.batch_size, shuffle=False, collate_fn=multimodal_collate)
+                for batch in loader:
+                    z = self.models[mod](batch[mod].to(self.device)).cpu()
+                    results["embeddings"].append(z)
+                    results["labels"].extend([mod] * z.size(0))
+                    results["ids"].extend(batch['id'])
+                    
+        results["embeddings"] = torch.cat(results["embeddings"], 0)
+        torch.save(results, output_path)
+        print(f"📦 Embeddings exported to {output_path}")
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_root', default='./data')
+    # Path Arguments
+    parser.add_argument('--data_root', required=True)
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--encoders_path', required=True)
-    parser.add_argument('--split_path', default='./data/unified_split.txt') # Added argument
-    parser.add_argument('--epochs', type=int, default=1)
-    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--split_path', required=True)
+    
+    # Hyperparameters propagated from master pipeline
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--lr', type=float, default=0.0005)
+    parser.add_argument('--alpha', type=float, default=-2.0)
+    parser.add_argument('--beta', type=float, default=2.0)
+    parser.add_argument('--no_aug', action='store_true', help="Disable contrastive augmentations")
     parser.add_argument('--device', default='cpu')
+    
     args, _ = parser.parse_known_args()
 
-    # Load the split to ensure isolation
-    train_ids = load_split(args.split_path)
+    # Load Train IDs from centralized split file
+    train_ids = []
+    if os.path.exists(args.split_path):
+        with open(args.split_path, 'r') as f:
+            mode = None
+            for line in f:
+                line = line.strip()
+                if line == "train_ids:": mode = "train"
+                elif line == "val_ids:": mode = "val"
+                elif line and mode == "train" and not line.startswith("#"):
+                    train_ids.append(line)
 
-    trainer = NeuroTrainer(args.data_root, args.device, args.batch_size)
-    trainer.root = args.data_root 
+    # Initialize Trainer with CLI parameters
+    trainer = NeuroTrainer(
+        args.data_root, 
+        args.device, 
+        args.batch_size, 
+        args.lr,
+        alpha=args.alpha,
+        beta=args.beta,
+        use_aug=not args.no_aug
+    )
     
-    # Pass train_ids to the training loop
     trainer.run_training(epochs=args.epochs, train_ids=train_ids)
-    
-    # Export everything (Train + Val) for downstream use
     trainer.export_embeddings(args.embeddings_path)
     
+    # Save final model state for the downstream pipeline
     os.makedirs(os.path.dirname(args.encoders_path), exist_ok=True)
     torch.save({"models": {k: v.state_dict() for k, v in trainer.models.items()}}, args.encoders_path)
+    print(f"✅ Pre-training finished. Weights saved to {args.encoders_path}")

@@ -2,6 +2,7 @@ import csv
 import os
 import random
 from collections import defaultdict
+import argparse 
 
 import torch
 import torch.nn as nn
@@ -14,6 +15,7 @@ from model.generator.generator import ProM3E_Generator
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 TARGETS = ["updrs1_score", "updrs2_score", "updrs3_score", "updrs4_score"]
 
+# --- Helper Functions ---
 def parse_float(x):
     try: return float(x)
     except: return None
@@ -51,9 +53,9 @@ def load_embeddings(path):
     return by_id
 
 def hallucinate_missing_modalities(model, available, device="cpu"):
-    """REVERTED: Returns 4096D Reconstructions"""
     model.eval()
-    input_tensor, mask = torch.zeros(1, 4, 1024, device=device), torch.ones(1, 4, dtype=torch.bool, device=device)
+    input_tensor = torch.zeros(1, 4, 1024, device=device)
+    mask = torch.ones(1, 4, dtype=torch.bool, device=device)
     with torch.no_grad():
         for i, mod in enumerate(MOD_ORDER):
             if mod in available:
@@ -62,7 +64,7 @@ def hallucinate_missing_modalities(model, available, device="cpu"):
         z_recon, _, _ = model(input_tensor, mask)
     return {mod: z_recon[0][i].detach().cpu() for i, mod in enumerate(MOD_ORDER)}
 
-def build_visit_feature(generator, available, delta_prev, device="cpu"):
+def build_visit_feature(generator, available, device="cpu"):
     recon = hallucinate_missing_modalities(generator, available, device=device)
     feat, mask_feat = [], []
     for mod in MOD_ORDER:
@@ -70,106 +72,178 @@ def build_visit_feature(generator, available, delta_prev, device="cpu"):
             feat.append(available[mod]); mask_feat.append(1.0)
         else:
             feat.append(recon[mod]); mask_feat.append(0.0)
-    x = torch.cat([torch.cat(feat, dim=0), torch.tensor(mask_feat, dtype=torch.float32), torch.tensor([delta_prev], dtype=torch.float32)], dim=0)
-    return x
+    # Returns 4096 + 4 mask bits
+    return torch.cat([torch.cat(feat, dim=0), torch.tensor(mask_feat, dtype=torch.float32)], dim=0)
 
-class SequenceTransitionDataset(Dataset):
+class SequenceDataset(Dataset):
     def __init__(self, embeddings_by_id, visits_subset, generator, device="cpu"):
         self.samples = []
         for patno, visits in visits_subset.items():
             visits = sorted(visits, key=lambda x: x["year"])
+            
             if len(visits) < 2: continue
-            for idx, (v_cur, v_next) in enumerate(zip(visits[:-1], visits[1:])):
-                history = []
-                prev_yr = None
-                for v in visits[:idx+1]:
-                    mods = embeddings_by_id.get(v["key"])
-                    if not mods or len(mods) == 0: prev_yr = v["year"]; continue
-                    delta_p = 0.0 if prev_yr is None else (v["year"] - prev_yr)
-                    history.append(build_visit_feature(generator, mods, delta_p, device))
-                    prev_yr = v["year"]
-                if history: self.samples.append((history, v_next["year"] - v_cur["year"], v_next["targets"]))
+            
+            sequence_embeddings = []
+            valid_sequence = True
+            
+            for v in visits:
+                mods = embeddings_by_id.get(v["key"])
+                if not mods: 
+                    valid_sequence = False; break
+                sequence_embeddings.append(build_visit_feature(generator, mods, device))
+            
+            if not valid_sequence: continue
+
+            for i in range(len(visits) - 1):
+                history_emb = sequence_embeddings[:i+1]
+                history_times = [v["year"] for v in visits[:i+1]]
+                
+                target_visit = visits[i+1]
+                target_score = target_visit["targets"]
+                
+                dt_pred = target_visit["year"] - history_times[-1]
+                
+                self.samples.append((
+                    history_emb,     
+                    history_times,   
+                    dt_pred,        
+                    target_score    
+                ))
 
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx): return self.samples[idx]
 
-class RNNRegressor(nn.Module):
-    def __init__(self, input_dim=4101, hidden_dim=256): # REVERTED TO FULL DIM + TIME
+def collate_fn(batch):
+    hist_embs, hist_times, dt_preds, targets = zip(*batch)
+    lengths = torch.tensor([len(h) for h in hist_embs], dtype=torch.long)
+    padded_embs = pad_sequence([torch.stack(h) for h in hist_embs], batch_first=True)
+    
+    padded_deltas = torch.zeros(len(batch), padded_embs.size(1))
+    for i, times in enumerate(hist_times):
+        deltas = [0.0] + [times[j] - times[j-1] for j in range(1, len(times))]
+        padded_deltas[i, :len(deltas)] = torch.tensor(deltas)
+        
+    return padded_embs, padded_deltas, lengths, torch.tensor(dt_preds, dtype=torch.float32).unsqueeze(1), torch.stack(targets)
+
+# --- ARCHITECTURE: The Successful Forecasting GRU ---
+class ForecastingGRU(nn.Module):
+    def __init__(self, input_dim=4100, hidden_dim=256, dropout=0.5):
         super().__init__()
-        self.rnn = nn.GRU(input_dim, hidden_dim, batch_first=True)
-        self.head = nn.Sequential(
-            nn.Linear(hidden_dim + 1, 256), nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.5),
-            nn.Linear(256, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.3), nn.Linear(64, 4)
+        
+        self.compressor = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
-    def forward(self, x, lengths, dt):
-        packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
-        _, h = self.rnn(packed)
-        return self.head(torch.cat([h[-1], dt], dim=1))
+        
+        self.time_encoder = nn.Linear(1, 32)
+        
+        self.gru = nn.GRU(
+            hidden_dim + 32, 
+            hidden_dim, 
+            num_layers=2, 
+            batch_first=True,
+            dropout=dropout
+        )
+        
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim + 1, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1)
+        )
+        
+    def forward(self, x, deltas, lengths, dt_pred):
+        B, Seq, D = x.shape
+        x_comp = self.compressor(x.view(-1, D)).view(B, Seq, -1)
+        t_emb = F.relu(self.time_encoder(deltas.unsqueeze(-1)))
+        
+        rnn_input = torch.cat([x_comp, t_emb], dim=2)
+        packed = pack_padded_sequence(rnn_input, lengths.cpu(), batch_first=True, enforce_sorted=False)
+        _, h_n = self.gru(packed)
+        
+        final_state = h_n[-1]
+        return self.head(torch.cat([final_state, dt_pred], dim=1))
 
-def collate_sequences(batch):
-    hist, dts, ys = zip(*batch)
-    lengths = torch.tensor([len(h) for h in hist], dtype=torch.long)
-    padded = pad_sequence([torch.stack(h, dim=0) for h in hist], batch_first=True)
-    return padded, lengths, torch.tensor(dts, dtype=torch.float32).unsqueeze(1), torch.stack(ys, dim=0)
+def train_eval(model, train_loader, val_loader, args):
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    best_r2, best_state = -float('inf'), None
+    SCALE = 100.0 
 
-def train_eval(model, train_loader, val_loader, device="cpu", epochs=50, lr=1e-3):
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-    best_mse, best_state = float('inf'), None
-
-    def masked_metrics(pred, target):
-        mask = ~torch.isnan(target)
-        mse_list, r2_list = [], []
-        for i in range(target.shape[1]):
-            m = mask[:, i]
-            if m.any():
-                mse = F.mse_loss(pred[m, i], target[m, i])
-                mse_list.append(mse)
-                var = torch.var(target[m, i], unbiased=False)
-                r2_list.append(1 - mse / (var + 1e-8))
-            else:
-                mse_list.append(torch.tensor(float('nan'))); r2_list.append(torch.tensor(float('nan')))
-        return torch.stack(mse_list), torch.stack(r2_list)
-
-    for epoch in range(epochs):
-        model.train(); total_loss, n_batches = 0.0, 0
-        for x, lengths, dt, y in train_loader:
-            x, lengths, dt, y = x.to(device), lengths.to(device), dt.to(device), y.to(device)
-            mask = ~torch.isnan(y)
-            pred = model(x, lengths, dt)
-            loss = F.mse_loss(pred[mask], y[mask])
-            opt.zero_grad(); loss.backward(); opt.step(); total_loss += loss.item(); n_batches += 1
-
-        model.eval()
-        with torch.no_grad():
-            v_preds, v_trues = [], []
-            for x, lengths, dt, y in val_loader:
-                v_preds.append(model(x.to(device), lengths.to(device), dt.to(device)).cpu()); v_trues.append(y)
-            v_preds, v_trues = torch.cat(v_preds), torch.cat(v_trues)
-            mse_per, r2_per = masked_metrics(v_preds, v_trues)
-            avg_v_mse = mse_per[~torch.isnan(mse_per)].mean().item()
+    for epoch in range(args.epochs):
+        model.train(); total_loss = 0
+        for x, deltas, lengths, dt_pred, y in train_loader:
+            x, deltas, dt_pred, y = x.to(args.device), deltas.to(args.device), dt_pred.to(args.device), y.to(args.device)
             
-            status = "⭐ Best!" if avg_v_mse < best_mse else ""
-            if status: best_mse = avg_v_mse; best_state = model.state_dict()
+            target = y[:, args.target_idx].unsqueeze(1) / SCALE
+            mask = ~torch.isnan(target)
+            if not mask.any(): continue
+            
+            x_pure = x[:, :, :-4] 
+            
+            pred = model(x_pure, deltas, lengths, dt_pred)
+            loss = F.mse_loss(pred[mask], target[mask])
+            
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
+        
+        scheduler.step()
+        
+        model.eval()
+        v_preds, v_trues = [], []
+        with torch.no_grad():
+            for x, deltas, lengths, dt_pred, y in val_loader:
+                x, deltas, dt_pred = x.to(args.device), deltas.to(args.device), dt_pred.to(args.device)
+                
+                x_pure = x[:, :, :-4]
+                p = model(x_pure, deltas, lengths, dt_pred)
+                
+                v_preds.append(p.cpu() * SCALE)
+                v_trues.append(y[:, args.target_idx].unsqueeze(1))
+        
+        v_preds, v_trues = torch.cat(v_preds), torch.cat(v_trues)
+        m = ~torch.isnan(v_trues)
+        
+        if m.sum() == 0: r2 = 0.0
+        else:
+            mse = F.mse_loss(v_preds[m], v_trues[m])
+            var = torch.var(v_trues[m])
+            r2 = (1 - mse / (var + 1e-8)).item()
+        
+        if r2 > best_r2:
+            best_r2 = r2
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            
+        print(f"Epoch {epoch+1:03d}/{args.epochs} | Loss: {total_loss/len(train_loader):.4f} | Val R2: {r2:.4f} {'⭐' if r2 == best_r2 else ''}")
 
-            print(f"Epoch {epoch+1:02d}/{epochs} | train_mse={total_loss/max(n_batches,1):.4f} | val_mse={avg_v_mse:.4f} | val_rmse={torch.sqrt(mse_per).tolist()} | val_r2={r2_per.tolist()} {status}")
     return best_state
 
 def main():
-    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv_path', required=True)
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--generator_ckpt', required=True)
     parser.add_argument('--progression_ckpt', required=True)
+    parser.add_argument('--target_idx', type=int, default=2)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=1e-3)
+    
+    # Original Tuned Parameters that worked
+    parser.add_argument('--lr', type=float, default=2e-4) 
+    parser.add_argument('--hidden_dim', type=int, default=256)
+    parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument('--weight_decay', type=float, default=1e-2)
     parser.add_argument('--device', default='cpu')
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args()
 
     visits = load_csv_visits(args.csv_path)
     embs = load_embeddings(args.embeddings_path)
-    gen = ProM3E_Generator(1024)
-    gen.load_state_dict(torch.load(args.generator_ckpt, map_location="cpu")["model_state"])
+    gen = ProM3E_Generator(embed_dim=1024, num_layers=3).to(args.device)
+    gen.load_state_dict(torch.load(args.generator_ckpt, map_location=args.device)["model_state"])
 
     split_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'unified_split.txt'))
     train_pts, val_pts = set(), set()
@@ -180,21 +254,20 @@ def main():
                 if 'train_ids' in line: mode = 'train'
                 elif 'val_ids' in line: mode = 'val'
                 elif line.strip() and not line.startswith('#'):
-                    patno = line.split('_')[0]
-                    if mode == 'train': train_pts.add(patno)
-                    else: val_pts.add(patno)
+                    train_pts.add(line.split('_')[0]) if mode == 'train' else val_pts.add(line.split('_')[0])
 
-    train_set = SequenceTransitionDataset(embs, {p: v for p, v in visits.items() if p in train_pts}, gen, args.device)
-    val_set = SequenceTransitionDataset(embs, {p: v for p, v in visits.items() if p in val_pts}, gen, args.device)
+    t_ds = SequenceDataset(embs, {p: v for p, v in visits.items() if p in train_pts}, gen, args.device)
+    v_ds = SequenceDataset(embs, {p: v for p, v in visits.items() if p in val_pts}, gen, args.device)
     
-    t_loader = DataLoader(train_set, batch_size=32, shuffle=True, collate_fn=collate_sequences)
-    v_loader = DataLoader(val_set, batch_size=64, collate_fn=collate_sequences)
+    t_loader = DataLoader(t_ds, batch_size=32, shuffle=True, collate_fn=collate_fn)
+    v_loader = DataLoader(v_ds, batch_size=64, collate_fn=collate_fn)
 
-    model = RNNRegressor(4096 + 4 + 1).to(args.device) # REVERTED TO FULL DIM + MASK + TIME
-    best = train_eval(model, t_loader, v_loader, device=args.device, epochs=args.epochs, lr=args.lr)
+    model = ForecastingGRU(input_dim=4096, hidden_dim=args.hidden_dim, dropout=args.dropout).to(args.device)
+    best = train_eval(model, t_loader, v_loader, args)
+
     if best:
         os.makedirs(os.path.dirname(args.progression_ckpt), exist_ok=True)
-        torch.save({"model_state": best, "input_dim": (4096+4+1)}, args.progression_ckpt)
-        print(f"Saved best regressor to {args.progression_ckpt}")
+        torch.save({"model_state": best, "target_idx": args.target_idx}, args.progression_ckpt)
+        print(f"✅ Saved Forecasting Specialist to {args.progression_ckpt}")
 
 if __name__ == "__main__": main()

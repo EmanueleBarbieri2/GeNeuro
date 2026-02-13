@@ -63,57 +63,69 @@ class UpdrsDataset(Dataset):
     def __getitem__(self, idx): return self.samples[idx][1], self.samples[idx][2]
 
 class Regressor(nn.Module):
-    def __init__(self, input_dim=4100): # REVERTED TO FULL DIM
+    def __init__(self, input_dim=4100): 
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, 512), nn.BatchNorm1d(512), nn.ReLU(), nn.Dropout(0.5),
-            nn.Linear(512, 128), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(0.3), nn.Linear(128, 4)
+            nn.Linear(512, 128), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(0.3), 
+            # CHANGED: Output 1 instead of 4
+            nn.Linear(128, 1)
         )
     def forward(self, x): return self.net(x)
 
-def train_eval(model, train_loader, val_loader, device="cpu", epochs=50, lr=1e-3):
+def train_eval(model, train_loader, val_loader, target_idx, device="cpu", epochs=50, lr=1e-3):
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-    best_mse, best_state = float('inf'), None
-
-    def masked_metrics(pred, target):
-        mask = ~torch.isnan(target)
-        mse_list, r2_list = [], []
-        for i in range(target.shape[1]):
-            m = mask[:, i]
-            if m.any():
-                mse = F.mse_loss(pred[m, i], target[m, i])
-                mse_list.append(mse)
-                var = torch.var(target[m, i], unbiased=False)
-                r2_list.append(1 - mse / (var + 1e-8))
-            else:
-                mse_list.append(torch.tensor(float('nan'))); r2_list.append(torch.tensor(float('nan')))
-        return torch.stack(mse_list), torch.stack(r2_list)
+    # Cosine Annealing helps stabilize the single target convergence
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    best_r2, best_state = -float('inf'), None
+    
+    # Scale for stability (Neural nets prefer 0.0-1.0 range over 0.0-100.0)
+    SCALE = 100.0
 
     for epoch in range(epochs):
         model.train(); total_loss = 0.0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
-            mask = ~torch.isnan(y)
-            loss = F.mse_loss(model(x)[mask], y[mask])
+            
+            # CHANGED: Select single target & Normalize
+            target = y[:, target_idx].unsqueeze(1) / SCALE
+            mask = ~torch.isnan(target)
+            if not mask.any(): continue
+
+            # Calculate loss only on valid samples for this target
+            pred = model(x)
+            loss = F.mse_loss(pred[mask], target[mask])
+            
             opt.zero_grad(); loss.backward(); opt.step(); total_loss += loss.item()
+        
+        scheduler.step()
 
         model.eval()
         with torch.no_grad():
             preds, trues = [], []
             for x, y in val_loader:
-                preds.append(model(x.to(device)).cpu()); trues.append(y)
+                # Predict and Scale back up
+                preds.append(model(x.to(device)).cpu() * SCALE)
+                trues.append(y[:, target_idx].unsqueeze(1))
+            
             preds, trues = torch.cat(preds), torch.cat(trues)
             
-            mse_per_mod, r2_per_mod = masked_metrics(preds, trues)
-            avg_v_mse = mse_per_mod[~torch.isnan(mse_per_mod)].mean().item()
-            
-            status = ""
-            if avg_v_mse < best_mse:
-                best_mse = avg_v_mse; best_state = model.state_dict(); status = "⭐ Best!"
+            # Calculate Single Target R2
+            mask = ~torch.isnan(trues)
+            if mask.sum() == 0:
+                avg_v_mse = 0.0
+                r2 = 0.0
+            else:
+                avg_v_mse = F.mse_loss(preds[mask], trues[mask]).item()
+                var = torch.var(trues[mask])
+                r2 = (1 - avg_v_mse / (var.item() + 1e-8))
 
-            print(f"Epoch {epoch+1:02d}/{epochs} | train_mse={total_loss/len(train_loader):.4f} | "
-                  f"val_mse={avg_v_mse:.4f} | val_rmse={torch.sqrt(mse_per_mod).tolist()} | "
-                  f"val_r2={r2_per_mod.tolist()} {status}")
+            status = ""
+            if r2 > best_r2:
+                best_r2 = r2; best_state = model.state_dict(); status = "⭐ Best!"
+
+            print(f"Epoch {epoch+1:02d}/{epochs} | Loss: {total_loss/len(train_loader):.4f} | "
+                  f"Val MSE: {avg_v_mse:.4f} | Val R2: {r2:.4f} {status}")
     return best_state
 
 def main():
@@ -123,6 +135,8 @@ def main():
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--generator_ckpt', required=True)
     parser.add_argument('--updrs_ckpt', required=True)
+    # CHANGED: Add target_idx argument
+    parser.add_argument('--target_idx', type=int, default=2, help="1=UPDRS2, 2=UPDRS3")
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--device', default='cpu')
@@ -130,8 +144,10 @@ def main():
 
     targets = load_csv_targets(args.csv_path)
     embs = load_embeddings(args.embeddings_path)
-    gen = ProM3E_Generator(1024)
-    gen.load_state_dict(torch.load(args.generator_ckpt, map_location="cpu")["model_state"])
+    
+    # CHANGED: Ensure Generator init matches your 3-layer checkpoint
+    gen = ProM3E_Generator(embed_dim=1024, num_layers=3).to(args.device)
+    gen.load_state_dict(torch.load(args.generator_ckpt, map_location=args.device)["model_state"])
 
     split_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'unified_split.txt'))
     train_ids, val_ids = set(), set()
@@ -148,11 +164,15 @@ def main():
     train_loader = DataLoader(torch.utils.data.Subset(dataset, [i for i, s in enumerate(dataset.samples) if s[0] in train_ids]), batch_size=32, shuffle=True)
     val_loader = DataLoader(torch.utils.data.Subset(dataset, [i for i, s in enumerate(dataset.samples) if s[0] in val_ids]), batch_size=64)
 
-    model = Regressor(4096+4).to(args.device) # REVERTED
-    best = train_eval(model, train_loader, val_loader, device=args.device, epochs=args.epochs, lr=args.lr)
+    model = Regressor(4096+4).to(args.device)
+    
+    # CHANGED: Pass target_idx to train_eval
+    best = train_eval(model, train_loader, val_loader, args.target_idx, device=args.device, epochs=args.epochs, lr=args.lr)
+    
     if best:
         os.makedirs(os.path.dirname(args.updrs_ckpt), exist_ok=True)
-        torch.save({"model_state": best, "input_dim": 4096+4}, args.updrs_ckpt)
+        # CHANGED: Save target_idx metadata
+        torch.save({"model_state": best, "input_dim": 4096+4, "target_idx": args.target_idx}, args.updrs_ckpt)
         print(f"Saved best regressor to {args.updrs_ckpt}")
 
 if __name__ == "__main__": main()
