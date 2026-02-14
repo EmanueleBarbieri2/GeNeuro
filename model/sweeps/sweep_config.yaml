@@ -1,0 +1,109 @@
+program: model/sweeps/sweep_runner.py
+method: bayes
+metric:
+  name: total_pipeline_score
+  goal: minimize
+
+parameters:
+  # ============================================================
+  # 🧠 STAGE 1: CONTRASTIVE ALIGNMENT (The Encoder)
+  # ============================================================
+  hub_name:
+    values: ["fMRI", "MRI", "SPECT", "DTI"]
+  contrastive_alpha:
+    values: [-2.0, -5.0, -10.0, -20.0]
+  contrastive_beta:
+    values: [1.0, 2.0, 5.0]
+  threshold:
+    values: [0.50, 0.65, 0.80, 0.90]
+
+  # -- Architecture --
+  hidden_dim:
+    values: [64, 128, 256]
+  embed_dim:
+    values: [512, 1024, 2048]
+
+  # -- Optimization --
+  contrastive_lr:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.001
+  contrastive_batch_size:
+    values: [16, 32, 64]
+  contrastive_epochs:
+    values: [50, 100, 150]
+  clip_val:
+    values: [0.5, 1.0, 2.0]
+
+  # -- Data Augmentation --
+  no_contrastive_aug:
+    values: [true, false]
+  aug_mask:
+    values: [0.10, 0.15, 0.25]
+  aug_jitter:
+    values: [0.005, 0.01, 0.05]
+
+  # ============================================================
+  # 🎨 STAGE 2: GENERATIVE HALLUCINATION (The Transformer)
+  # ============================================================
+  gen_num_layers:
+    values: [2, 3, 4]
+  gen_num_heads:
+    values: [4, 8, 16]
+  gen_hidden_dim:
+    values: [256, 512, 1024]
+  gen_num_registers:
+    values: [0, 4, 8]
+  gen_mlp_depth:
+    values: [1, 2, 3]
+
+  # -- Training Dynamics --
+  generator_lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0005
+  generator_weight_decay:
+    values: [0.0, 0.0001, 0.001]
+  generator_epochs:
+    values: [50, 100, 150]
+  
+  # -- Loss Function Weights & Logic --
+  generator_divergence:
+    values: ["mmd", "kl", "none"]
+  generator_alpha:
+    values: [-2.0, -5.0, -10.0]
+  generator_beta:
+    values: [2.0, 5.0]
+  generator_lambda:
+    values: [0.01, 0.005, 0.001, 0.0001]
+
+  # -- Regularization Techniques --
+  gen_dropout:
+    values: [0.0, 0.1, 0.3]
+  gen_keep_prob:
+    values: [0.3, 0.5, 0.7]
+  gen_kl_warmup:
+    values: [0, 10, 20]
+
+  # ============================================================
+  # 🎯 STAGE 3: DOWNSTREAM SPECIALISTS
+  # ============================================================
+  downstream_lr:
+    values: [0.001, 0.0005, 0.0001]
+  cls_epochs:
+    values: [30, 50, 100]
+  prog_epochs:
+    values: [30, 50, 100]
+  updrs_epochs:
+    values: [30, 50, 100]
+
+  # ============================================================
+  # ⚙️ SYSTEM
+  # ============================================================
+  device:
+    value: "cpu"
+  
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
