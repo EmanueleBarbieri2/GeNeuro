@@ -92,9 +92,13 @@ def evaluate(model, loader, device="cpu"):
 
 def main():
     import argparse
+    import os
+    import torch
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv_path', required=True)
     parser.add_argument('--embeddings_path', required=True) # Point this to recon_demo.pt
+    parser.add_argument('--classifier_ckpt', default='model/checkpoints/classifier.pt') # FIXED: Added checkpoint arg
     parser.add_argument('--split_path', default='data/unified_split.txt')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -142,6 +146,8 @@ def main():
     criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
     best_bal_acc = 0.0
+    best_state = None # FIXED: Properly initialize best_state
+
     for epoch in range(args.epochs):
         model.train()
         for x, y in train_loader:
@@ -153,7 +159,20 @@ def main():
         metrics = evaluate(model, val_loader, args.device)
         if metrics['bal_acc'] > best_bal_acc:
             best_bal_acc = metrics['bal_acc']
+            # FIXED: Actually extract and clone the PyTorch weights
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            
         print(f"Epoch {epoch+1:02d} | Val Bal. Acc: {metrics['bal_acc']:.4f}")
+
+    # FIXED: Save the correct dictionary to the correct file path
+    if best_state is not None:
+        os.makedirs(os.path.dirname(args.classifier_ckpt), exist_ok=True)
+        torch.save({
+            "model_state": best_state, 
+            "input_dim": input_dim,        # Crucial for the explainer!
+            "best_bal_acc": best_bal_acc
+        }, args.classifier_ckpt)
+        print(f"✅ Saved Best Classifier to {args.classifier_ckpt}")
 
 if __name__ == "__main__":
     main()

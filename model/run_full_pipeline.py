@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument('--generator_alpha', type=float, default=-5.0)
     parser.add_argument('--generator_beta', type=float, default=5.0)
     parser.add_argument('--generator_lambda', type=float, default=0.001)
-    parser.add_argument('--generator_divergence', choices=['mmd', 'kl', 'none'], default='mmd')
+    parser.add_argument('--generator_divergence', choices=['mmd', 'kl', 'none'], default='kl')
     parser.add_argument('--gen_keep_prob', type=float, default=0.5)
     parser.add_argument('--gen_kl_warmup', type=int, default=10)
     parser.add_argument('--gen_hidden_dim', type=int, default=512)
