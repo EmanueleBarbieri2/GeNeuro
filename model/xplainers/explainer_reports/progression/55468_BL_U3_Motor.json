@@ -1,0 +1,603 @@
+{
+  "subject_id": "55468_BL",
+  "task": "progression_forecast_U3_Motor",
+  "prediction": 0.019556760787963867,
+  "modalities": {
+    "MRI": {
+      "top_nodes": [
+        {
+          "node_index": 19,
+          "label": 41,
+          "roi_name": "right_cerebral_white_matter_Volume",
+          "lut_name": "Right-Cerebral-White-Matter",
+          "importance": 9.8884743238159e-07,
+          "value_mean": 0.3768613338470459,
+          "grad_mean": 9.8884743238159e-07,
+          "contrib_mean": 3.7265834862409974e-07
+        },
+        {
+          "node_index": 0,
+          "label": 2,
+          "roi_name": "left_cerebral_white_matter_Volume",
+          "lut_name": "Left-Cerebral-White-Matter",
+          "importance": 9.869082759905723e-07,
+          "value_mean": 0.3708171248435974,
+          "grad_mean": 9.869082759905723e-07,
+          "contrib_mean": 3.6596247809939086e-07
+        },
+        {
+          "node_index": 3,
+          "label": 7,
+          "roi_name": "left_cerebellum_white_matter_Volume",
+          "lut_name": "Left-Cerebellum-White-Matter",
+          "importance": 9.339881330561184e-07,
+          "value_mean": 0.0234216395765543,
+          "grad_mean": 9.339881330561184e-07,
+          "contrib_mean": 2.1875534272908226e-08
+        },
+        {
+          "node_index": 22,
+          "label": 46,
+          "roi_name": "right_cerebellum_white_matter_Volume",
+          "lut_name": "Right-Cerebellum-White-Matter",
+          "importance": 9.302963803747843e-07,
+          "value_mean": 0.020553208887577057,
+          "grad_mean": 9.302963803747843e-07,
+          "contrib_mean": 1.912057534525502e-08
+        },
+        {
+          "node_index": 20,
+          "label": 43,
+          "roi_name": "right_lateral_ventricle_Volume",
+          "lut_name": "Right-Lateral-Ventricle",
+          "importance": 9.224740438185108e-07,
+          "value_mean": 0.009464850649237633,
+          "grad_mean": 9.224740438185108e-07,
+          "contrib_mean": 8.731078970924955e-09
+        },
+        {
+          "node_index": 11,
+          "label": 16,
+          "roi_name": "brain_stem_Volume",
+          "lut_name": "Brain-Stem",
+          "importance": 9.201958732774074e-07,
+          "value_mean": 0.036993615329265594,
+          "grad_mean": 9.201958732774074e-07,
+          "contrib_mean": 3.404137061124857e-08
+        },
+        {
+          "node_index": 1,
+          "label": 4,
+          "roi_name": "left_lateral_ventricle_Volume",
+          "lut_name": "Left-Lateral-Ventricle",
+          "importance": 9.193423124997935e-07,
+          "value_mean": 0.011492405086755753,
+          "grad_mean": 9.193423124997935e-07,
+          "contrib_mean": 1.0565454289235277e-08
+        },
+        {
+          "node_index": 23,
+          "label": 47,
+          "roi_name": "right_cerebellum_cortex_Volume",
+          "lut_name": "Right-Cerebellum-Cortex",
+          "importance": 9.165100323116349e-07,
+          "value_mean": 0.08714087307453156,
+          "grad_mean": 9.165100323116349e-07,
+          "contrib_mean": 7.986548666849558e-08
+        },
+        {
+          "node_index": 24,
+          "label": 49,
+          "roi_name": "right_thalamus_Volume",
+          "lut_name": "Right-Thalamus",
+          "importance": 9.135587220043817e-07,
+          "value_mean": 0.013917960226535797,
+          "grad_mean": 9.135587220043817e-07,
+          "contrib_mean": 1.271487359844059e-08
+        },
+        {
+          "node_index": 4,
+          "label": 8,
+          "roi_name": "left_cerebellum_cortex_Volume",
+          "lut_name": "Left-Cerebellum-Cortex",
+          "importance": 9.073880846699467e-07,
+          "value_mean": 0.08932887762784958,
+          "grad_mean": 9.073880846699467e-07,
+          "contrib_mean": 8.105595838969748e-08
+        },
+        {
+          "node_index": 107,
+          "label": 2030,
+          "roi_name": "rh_superiortemporal_Volume",
+          "lut_name": "ctx-rh-superiortemporal",
+          "importance": 9.062516141966626e-07,
+          "value_mean": 0.0,
+          "grad_mean": 9.062516141966626e-07,
+          "contrib_mean": 0.0
+        },
+        {
+          "node_index": 9,
+          "label": 14,
+          "roi_name": "third_ventricle_Volume",
+          "lut_name": "3rd-Ventricle",
+          "importance": 9.053290455085516e-07,
+          "value_mean": 0.0014672752004116774,
+          "grad_mean": 9.053290455085516e-07,
+          "contrib_mean": 1.3283668609531674e-09
+        },
+        {
+          "node_index": 31,
+          "label": 60,
+          "roi_name": "right_ventraldc_Volume",
+          "lut_name": "Right-VentralDC",
+          "importance": 9.04516639366193e-07,
+          "value_mean": 0.007129591424018145,
+          "grad_mean": 9.04516639366193e-07,
+          "contrib_mean": 6.448833911321117e-09
+        },
+        {
+          "node_index": 26,
+          "label": 51,
+          "roi_name": "right_putamen_Volume",
+          "lut_name": "Right-Putamen",
+          "importance": 9.040786608238705e-07,
+          "value_mean": 0.008053071796894073,
+          "grad_mean": 9.040786608238705e-07,
+          "contrib_mean": 7.280610336835025e-09
+        },
+        {
+          "node_index": 89,
+          "label": 2012,
+          "roi_name": "rh_lateralorbitofrontal_Volume",
+          "lut_name": "ctx-rh-lateralorbitofrontal",
+          "importance": 9.027637588587822e-07,
+          "value_mean": 0.0,
+          "grad_mean": 9.027637588587822e-07,
+          "contrib_mean": 0.0
+        }
+      ],
+      "top_edges": []
+    },
+    "fMRI": {
+      "top_nodes": [
+        {
+          "node_index": 35,
+          "label": 85,
+          "roi_name": "optic_chiasm_Volume",
+          "lut_name": "Optic-Chiasm",
+          "importance": 2.946030406292266e-07,
+          "value_mean": -18.466018676757812,
+          "grad_mean": 2.946030406292266e-07,
+          "contrib_mean": -5.4401452871388756e-06
+        },
+        {
+          "node_index": 10,
+          "label": 15,
+          "roi_name": "fourth_ventricle_Volume",
+          "lut_name": "4th-Ventricle",
+          "importance": 2.0580367277034384e-07,
+          "value_mean": -33.2181510925293,
+          "grad_mean": 2.0580367277034384e-07,
+          "contrib_mean": -6.836417469457956e-06
+        },
+        {
+          "node_index": 3,
+          "label": 7,
+          "roi_name": "left_cerebellum_white_matter_Volume",
+          "lut_name": "Left-Cerebellum-White-Matter",
+          "importance": 2.0222037733219622e-07,
+          "value_mean": -36.017154693603516,
+          "grad_mean": 2.0222037733219622e-07,
+          "contrib_mean": -7.283402737812139e-06
+        },
+        {
+          "node_index": 9,
+          "label": 14,
+          "roi_name": "third_ventricle_Volume",
+          "lut_name": "3rd-Ventricle",
+          "importance": 1.6140501202244195e-07,
+          "value_mean": -3.9433281421661377,
+          "grad_mean": 1.6140501202244195e-07,
+          "contrib_mean": -6.364729188135243e-07
+        },
+        {
+          "node_index": 13,
+          "label": 18,
+          "roi_name": "left_amygdala_Volume",
+          "lut_name": "Left-Amygdala",
+          "importance": 1.6128544189086824e-07,
+          "value_mean": -20.63575553894043,
+          "grad_mean": 1.6128544189086824e-07,
+          "contrib_mean": -3.3282469757978106e-06
+        },
+        {
+          "node_index": 22,
+          "label": 46,
+          "roi_name": "right_cerebellum_white_matter_Volume",
+          "lut_name": "Right-Cerebellum-White-Matter",
+          "importance": 1.584179898372895e-07,
+          "value_mean": -35.673362731933594,
+          "grad_mean": 1.584179898372895e-07,
+          "contrib_mean": -5.6513022173021454e-06
+        },
+        {
+          "node_index": 13,
+          "label": 18,
+          "roi_name": "left_amygdala_Thickness",
+          "lut_name": "Left-Amygdala",
+          "importance": 1.506109157389801e-07,
+          "value_mean": -7.339515686035156,
+          "grad_mean": 1.506109157389801e-07,
+          "contrib_mean": -1.1054112292185891e-06
+        },
+        {
+          "node_index": 48,
+          "label": 1007,
+          "roi_name": "lh_fusiform_Volume",
+          "lut_name": "ctx-lh-fusiform",
+          "importance": 1.484671230400636e-07,
+          "value_mean": -21.64836311340332,
+          "grad_mean": 1.484671230400636e-07,
+          "contrib_mean": -3.2140701478056144e-06
+        },
+        {
+          "node_index": 19,
+          "label": 41,
+          "roi_name": "right_cerebral_white_matter_Volume",
+          "lut_name": "Right-Cerebral-White-Matter",
+          "importance": 1.4653156199528894e-07,
+          "value_mean": 18.160612106323242,
+          "grad_mean": -1.4653156199528894e-07,
+          "contrib_mean": -2.6611028260958847e-06
+        },
+        {
+          "node_index": 110,
+          "label": 2033,
+          "roi_name": "rh_temporalpole_Volume",
+          "lut_name": "ctx-rh-temporalpole",
+          "importance": 1.4096360700932564e-07,
+          "value_mean": -35.300514221191406,
+          "grad_mean": 1.4096360700932564e-07,
+          "contrib_mean": -4.976087893737713e-06
+        },
+        {
+          "node_index": 36,
+          "label": 251,
+          "roi_name": "cc_posterior_Volume",
+          "lut_name": "CC_Posterior",
+          "importance": 1.3931828846125427e-07,
+          "value_mean": 16.784780502319336,
+          "grad_mean": -1.3931828846125427e-07,
+          "contrib_mean": -2.3384268388326745e-06
+        },
+        {
+          "node_index": 96,
+          "label": 2019,
+          "roi_name": "rh_parsorbitalis_Surface_Area",
+          "lut_name": "ctx-rh-parsorbitalis",
+          "importance": 1.3746513616297307e-07,
+          "value_mean": 42.39217758178711,
+          "grad_mean": 1.3746513616297307e-07,
+          "contrib_mean": 5.827446329931263e-06
+        },
+        {
+          "node_index": 80,
+          "label": 2003,
+          "roi_name": "rh_caudalmiddlefrontal_Volume",
+          "lut_name": "ctx-rh-caudalmiddlefrontal",
+          "importance": 1.3492312689322716e-07,
+          "value_mean": 46.11823654174805,
+          "grad_mean": -1.3492312689322716e-07,
+          "contrib_mean": -6.22241668679635e-06
+        },
+        {
+          "node_index": 4,
+          "label": 8,
+          "roi_name": "left_cerebellum_cortex_Volume",
+          "lut_name": "Left-Cerebellum-Cortex",
+          "importance": 1.33967787974143e-07,
+          "value_mean": -37.67483139038086,
+          "grad_mean": 1.33967787974143e-07,
+          "contrib_mean": -5.047214017395163e-06
+        },
+        {
+          "node_index": 74,
+          "label": 1033,
+          "roi_name": "lh_temporalpole_Volume",
+          "lut_name": "ctx-lh-temporalpole",
+          "importance": 1.301954029031549e-07,
+          "value_mean": -36.497093200683594,
+          "grad_mean": 1.301954029031549e-07,
+          "contrib_mean": -4.751753749587806e-06
+        }
+      ],
+      "top_edges": [
+        {
+          "edge_index": 3978,
+          "u": {
+            "node_index": 35,
+            "label": 85,
+            "roi_name": "optic_chiasm",
+            "lut_name": "Optic-Chiasm"
+          },
+          "v": {
+            "node_index": 23,
+            "label": 47,
+            "roi_name": "right_cerebellum_cortex",
+            "lut_name": "Right-Cerebellum-Cortex"
+          },
+          "importance": 4.489593266043812e-06,
+          "value": -0.0017593608936294913,
+          "grad": 4.489593266043812e-06,
+          "contrib": -7.898814935458631e-09
+        },
+        {
+          "edge_index": 1492,
+          "u": {
+            "node_index": 13,
+            "label": 18,
+            "roi_name": "left_amygdala",
+            "lut_name": "Left-Amygdala"
+          },
+          "v": {
+            "node_index": 23,
+            "label": 47,
+            "roi_name": "right_cerebellum_cortex",
+            "lut_name": "Right-Cerebellum-Cortex"
+          },
+          "importance": 4.486140824155882e-06,
+          "value": -0.0029495228081941605,
+          "grad": 4.486140824155882e-06,
+          "contrib": -1.3231974627103682e-08
+        },
+        {
+          "edge_index": 9967,
+          "u": {
+            "node_index": 88,
+            "label": 2011,
+            "roi_name": "rh_lateraloccipital",
+            "lut_name": "ctx-rh-lateraloccipital"
+          },
+          "v": {
+            "node_index": 23,
+            "label": 47,
+            "roi_name": "right_cerebellum_cortex",
+            "lut_name": "Right-Cerebellum-Cortex"
+          },
+          "importance": 4.4856460590381175e-06,
+          "value": -0.011015510186553001,
+          "grad": 4.4856460590381175e-06,
+          "contrib": -4.9411678304522866e-08
+        },
+        {
+          "edge_index": 1305,
+          "u": {
+            "node_index": 11,
+            "label": 16,
+            "roi_name": "brain_stem",
+            "lut_name": "Brain-Stem"
+          },
+          "v": {
+            "node_index": 62,
+            "label": 1021,
+            "roi_name": "lh_pericalcarine",
+            "lut_name": "ctx-lh-pericalcarine"
+          },
+          "importance": 4.032716333313147e-06,
+          "value": -0.129948690533638,
+          "grad": 4.032716333313147e-06,
+          "contrib": -5.240461860012147e-07
+        },
+        {
+          "edge_index": 1983,
+          "u": {
+            "node_index": 17,
+            "label": 30,
+            "roi_name": "left_vessel",
+            "lut_name": "Left-vessel"
+          },
+          "v": {
+            "node_index": 62,
+            "label": 1021,
+            "roi_name": "lh_pericalcarine",
+            "lut_name": "ctx-lh-pericalcarine"
+          },
+          "importance": 4.024275312985992e-06,
+          "value": -0.05451498553156853,
+          "grad": 4.024275312985992e-06,
+          "contrib": -2.19383309740806e-07
+        },
+        {
+          "edge_index": 966,
+          "u": {
+            "node_index": 8,
+            "label": 13,
+            "roi_name": "left_pallidum",
+            "lut_name": "Left-Pallidum"
+          },
+          "v": {
+            "node_index": 62,
+            "label": 1021,
+            "roi_name": "lh_pericalcarine",
+            "lut_name": "ctx-lh-pericalcarine"
+          },
+          "importance": 4.021903805551119e-06,
+          "value": -0.08394762128591537,
+          "grad": 4.021903805551119e-06,
+          "contrib": -3.376292454504437e-07
+        },
+        {
+          "edge_index": 2003,
+          "u": {
+            "node_index": 17,
+            "label": 30,
+            "roi_name": "left_vessel",
+            "lut_name": "Left-vessel"
+          },
+          "v": {
+            "node_index": 82,
+            "label": 2005,
+            "roi_name": "rh_cuneus",
+            "lut_name": "ctx-rh-cuneus"
+          },
+          "importance": 3.8241037145780865e-06,
+          "value": -0.002061119768768549,
+          "grad": 3.8241037145780865e-06,
+          "contrib": -7.88193599277065e-09
+        },
+        {
+          "edge_index": 986,
+          "u": {
+            "node_index": 8,
+            "label": 13,
+            "roi_name": "left_pallidum",
+            "lut_name": "Left-Pallidum"
+          },
+          "v": {
+            "node_index": 82,
+            "label": 2005,
+            "roi_name": "rh_cuneus",
+            "lut_name": "ctx-rh-cuneus"
+          },
+          "importance": 3.822450707957614e-06,
+          "value": -0.033302463591098785,
+          "grad": 3.822450707957614e-06,
+          "contrib": -1.2729702802971588e-07
+        },
+        {
+          "edge_index": 1325,
+          "u": {
+            "node_index": 11,
+            "label": 16,
+            "roi_name": "brain_stem",
+            "lut_name": "Brain-Stem"
+          },
+          "v": {
+            "node_index": 82,
+            "label": 2005,
+            "roi_name": "rh_cuneus",
+            "lut_name": "ctx-rh-cuneus"
+          },
+          "importance": 3.820818164967932e-06,
+          "value": -0.03179798647761345,
+          "grad": 3.820818164967932e-06,
+          "contrib": -1.2149432393471216e-07
+        },
+        {
+          "edge_index": 3073,
+          "u": {
+            "node_index": 27,
+            "label": 52,
+            "roi_name": "right_pallidum",
+            "lut_name": "Right-Pallidum"
+          },
+          "v": {
+            "node_index": 22,
+            "label": 46,
+            "roi_name": "right_cerebellum_white_matter",
+            "lut_name": "Right-Cerebellum-White-Matter"
+          },
+          "importance": 3.4858580875152256e-06,
+          "value": -0.024011913686990738,
+          "grad": 3.4858580875152256e-06,
+          "contrib": -8.370212611907846e-08
+        },
+        {
+          "edge_index": 926,
+          "u": {
+            "node_index": 8,
+            "label": 13,
+            "roi_name": "left_pallidum",
+            "lut_name": "Left-Pallidum"
+          },
+          "v": {
+            "node_index": 22,
+            "label": 46,
+            "roi_name": "right_cerebellum_white_matter",
+            "lut_name": "Right-Cerebellum-White-Matter"
+          },
+          "importance": 3.483938598947134e-06,
+          "value": -0.014432829804718494,
+          "grad": 3.483938598947134e-06,
+          "contrib": -5.028309146837273e-08
+        },
+        {
+          "edge_index": 9966,
+          "u": {
+            "node_index": 88,
+            "label": 2011,
+            "roi_name": "rh_lateraloccipital",
+            "lut_name": "ctx-rh-lateraloccipital"
+          },
+          "v": {
+            "node_index": 22,
+            "label": 46,
+            "roi_name": "right_cerebellum_white_matter",
+            "lut_name": "Right-Cerebellum-White-Matter"
+          },
+          "importance": 3.480958639556775e-06,
+          "value": -0.016766685992479324,
+          "grad": 3.480958639556775e-06,
+          "contrib": -5.8364140187450175e-08
+        },
+        {
+          "edge_index": 12565,
+          "u": {
+            "node_index": 111,
+            "label": 2034,
+            "roi_name": "rh_transversetemporal",
+            "lut_name": "ctx-rh-transversetemporal"
+          },
+          "v": {
+            "node_index": 22,
+            "label": 46,
+            "roi_name": "right_cerebellum_white_matter",
+            "lut_name": "Right-Cerebellum-White-Matter"
+          },
+          "importance": 3.4800468711182475e-06,
+          "value": -0.001531396177597344,
+          "grad": 3.4800468711182475e-06,
+          "contrib": -5.329330310388514e-09
+        },
+        {
+          "edge_index": 1747,
+          "u": {
+            "node_index": 15,
+            "label": 26,
+            "roi_name": "left_accumbens_area",
+            "lut_name": "Left-Accumbens-area"
+          },
+          "v": {
+            "node_index": 52,
+            "label": 1011,
+            "roi_name": "lh_lateraloccipital",
+            "lut_name": "ctx-lh-lateraloccipital"
+          },
+          "importance": 3.0110415991657646e-06,
+          "value": -0.02735365740954876,
+          "grad": 3.0110415991657646e-06,
+          "contrib": -8.236300175212818e-08
+        },
+        {
+          "edge_index": 1295,
+          "u": {
+            "node_index": 11,
+            "label": 16,
+            "roi_name": "brain_stem",
+            "lut_name": "Brain-Stem"
+          },
+          "v": {
+            "node_index": 52,
+            "label": 1011,
+            "roi_name": "lh_lateraloccipital",
+            "lut_name": "ctx-lh-lateraloccipital"
+          },
+          "importance": 3.0095204692770494e-06,
+          "value": -0.2662952244281769,
+          "grad": 3.0095204692770494e-06,
+          "contrib": -8.014209242901416e-07
+        }
+      ]
+    }
+  }
+}

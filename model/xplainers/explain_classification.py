@@ -56,10 +56,24 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = ProM3E_Generator(embed_dim=e_dim, num_layers=num_layers).to(device)
+        generator = generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = ProM3E_Generator(embed_dim=e_dim).to(device)
+        generator = generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
 
     # Auto-Detect Classifier Input Dimensions
     if not classifier_ckpt or not os.path.exists(classifier_ckpt):
@@ -153,10 +167,12 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
     
     for mod, g in graphs.items():
         if hasattr(g, "x") and g.x.grad is not None:
-            results["node_importance"][mod] = g.x.grad.abs().sum(dim=1).cpu() 
-            results["node_value"][mod] = g.x.detach().cpu().sum(dim=1) 
-            results["node_grad"][mod] = g.x.grad.detach().cpu().sum(dim=1) 
-            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu().sum(dim=1) 
+            # --- CHANGED: Removed .sum(dim=1) from all four lines below ---
+            results["node_importance"][mod] = g.x.grad.abs().cpu() 
+            results["node_value"][mod] = g.x.detach().cpu() 
+            results["node_grad"][mod] = g.x.grad.detach().cpu() 
+            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu() 
+            
         if hasattr(g, "edge_attr") and g.edge_attr.grad is not None:
             edge_val = g.edge_attr.detach().cpu()
             edge_grad = g.edge_attr.grad.detach().cpu()
@@ -166,6 +182,7 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
             results["edge_value"][mod] = edge_val
             results["edge_grad"][mod] = edge_grad 
             results["edge_contrib"][mod] = edge_val * edge_grad 
+            
         if include_edge_index and hasattr(g, "edge_index"): 
             results["edge_index"] = results.get("edge_index", {})
             results["edge_index"][mod] = g.edge_index.cpu() 

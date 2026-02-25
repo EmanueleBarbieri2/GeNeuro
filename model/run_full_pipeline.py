@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-Master ProM3E Pipeline:
-1. Stage 1: Contrastive Alignment (Encoder Training)
-2. Stage 2: Generative Hallucination (MMD/KL Toggle & Many-to-Many Masking)
-3. INTERMEDIATE: Smart Hybrid Reconstruction (Real + Hallucinated Fusion)
-4. Stage 3: Specialist Downstream Tasks (Decoupled Targets)
-"""
 
 import subprocess
 import sys
@@ -17,44 +10,44 @@ def parse_args():
     
     # --- Paths & General ---
     parser.add_argument('--data_csv', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'PPMI_Curated_Data_Cut_Public_20251112.csv')))
-    parser.add_argument('--split_path', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'unified_split.txt')))
+    parser.add_argument('--split_path', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'unified_split_master.txt')))
     parser.add_argument('--checkpoints_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), 'checkpoints')))
-    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--device', default='cuda')
     
-    # --- Stage 1: Contrastive Pre-training ---
+# --- Stage 1: Contrastive Pre-training ---
     parser.add_argument('--contrastive_epochs', type=int, default=100)
-    parser.add_argument('--contrastive_lr', type=float, default=5e-4)
-    parser.add_argument('--contrastive_batch_size', type=int, default=32) # Added
-    parser.add_argument('--contrastive_alpha', type=float, default=-5.0)
-    parser.add_argument('--contrastive_beta', type=float, default=5.0)
+    parser.add_argument('--contrastive_lr', type=float, default=0.00015) 
+    parser.add_argument('--contrastive_batch_size', type=int, default=32) 
+    parser.add_argument('--contrastive_alpha', type=float, default=-8.66) 
+    parser.add_argument('--contrastive_beta', type=float, default=8.32)   
     parser.add_argument('--hub_name', default='fMRI', choices=['fMRI', 'MRI', 'SPECT', 'DTI'])
-    parser.add_argument('--aug_mask', type=float, default=0.15)
-    parser.add_argument('--aug_jitter', type=float, default=0.01)
-    parser.add_argument('--clip_val', type=float, default=1.0)
-    parser.add_argument('--hidden_dim', type=int, default=128)
-    parser.add_argument('--embed_dim', type=int, default=1024)
-    parser.add_argument('--threshold', type=float, default=0.80)
+    parser.add_argument('--aug_mask', type=float, default=0.24)           
+    parser.add_argument('--aug_jitter', type=float, default=0.01)         
+    parser.add_argument('--clip_val', type=float, default=2.3)            
+    parser.add_argument('--hidden_dim', type=int, default=256)            
+    parser.add_argument('--embed_dim', type=int, default=1024)            
+    parser.add_argument('--threshold', type=float, default=0.60)         
     parser.add_argument('--no_contrastive_aug', action='store_true')
     
     # --- Stage 2: ProM3E Generator ---
     parser.add_argument('--generator_epochs', type=int, default=100)
-    parser.add_argument('--generator_lr', type=float, default=1e-4)
-    parser.add_argument('--generator_weight_decay', type=float, default=1e-4)
-    parser.add_argument('--generator_alpha', type=float, default=-5.0)
-    parser.add_argument('--generator_beta', type=float, default=5.0)
-    parser.add_argument('--generator_lambda', type=float, default=0.001)
-    parser.add_argument('--generator_divergence', choices=['mmd', 'kl', 'none'], default='kl')
-    parser.add_argument('--gen_keep_prob', type=float, default=0.5)
-    parser.add_argument('--gen_kl_warmup', type=int, default=10)
-    parser.add_argument('--gen_hidden_dim', type=int, default=512)
-    parser.add_argument('--gen_num_heads', type=int, default=8)
-    parser.add_argument('--gen_num_layers', type=int, default=3)
-    parser.add_argument('--gen_num_registers', type=int, default=4)
-    parser.add_argument('--gen_mlp_depth', type=int, default=2)
-    parser.add_argument('--gen_dropout', type=float, default=0.1)
+    parser.add_argument('--generator_lr', type=float, default=0.000012)     
+    parser.add_argument('--generator_weight_decay', type=float, default=0.004) 
+    parser.add_argument('--generator_alpha', type=float, default=-4.41)     
+    parser.add_argument('--generator_beta', type=float, default=1.41)       
+    parser.add_argument('--generator_lambda', type=float, default=0.00043)  
+    parser.add_argument('--generator_divergence', choices=['mmd', 'kl', 'none'], default='kl') 
+    parser.add_argument('--gen_keep_prob', type=float, default=0.5)         
+    parser.add_argument('--gen_kl_warmup', type=int, default=12)           
+    parser.add_argument('--gen_hidden_dim', type=int, default=1024)         
+    parser.add_argument('--gen_num_heads', type=int, default=8)             
+    parser.add_argument('--gen_num_layers', type=int, default=5)            
+    parser.add_argument('--gen_num_registers', type=int, default=0)         
+    parser.add_argument('--gen_mlp_depth', type=int, default=3)             
+    parser.add_argument('--gen_dropout', type=float, default=0.28)          
     
     # --- Stage 3: Downstream Tasks ---
-    parser.add_argument('--downstream_lr', type=float, default=1e-3) # Added
+    parser.add_argument('--downstream_lr', type=float, default=0.01)        
     parser.add_argument('--cls_epochs', type=int, default=100)
     parser.add_argument('--prog_epochs', type=int, default=100)
     parser.add_argument('--updrs_epochs', type=int, default=100)
@@ -81,7 +74,7 @@ ENV = os.environ.copy()
 ENV['PYTHONPATH'] = '.'
 
 def run_contrastive():
-    print(f"\n🚀 STAGE 1: Contrastive Alignment (Hub: {args.hub_name})")
+    print(f"\n STAGE 1: Contrastive Alignment (Hub: {args.hub_name})")
     cmd = [
         sys.executable, 'model/contrastive/train.py',
         '--epochs', str(args.contrastive_epochs),
@@ -106,7 +99,7 @@ def run_contrastive():
     subprocess.run(cmd, check=True, env=ENV)
 
 def train_generator():
-    print(f"\n🚀 STAGE 2: ProM3E Generator ({args.generator_divergence.upper()})")
+    print(f"\n STAGE 2: ProM3E Generator ({args.generator_divergence.upper()})")
     cmd = [
         sys.executable, 'model/generator/train_generator.py',
         '--out', GENERATOR_CKPT,
@@ -132,7 +125,7 @@ def train_generator():
     subprocess.run(cmd, check=True, env=ENV)
 
 def run_smart_reconstruction():
-    print(f"\n🧠 INTERMEDIATE: Smart Hybrid Reconstruction")
+    print(f"\n INTERMEDIATE: Smart Hybrid Reconstruction")
     script_path = 'model/generator/run_generator_demo.py'
     cmd = [
         sys.executable, script_path,
@@ -148,7 +141,7 @@ def run_smart_reconstruction():
     subprocess.run(cmd, check=True, env=ENV)
 
 def run_downstream():
-    print('\n📊 STAGE 3: Granular Downstream Tasks')
+    print('\n STAGE 3: Granular Downstream Tasks')
     # 1. Classification
     subprocess.run([
         sys.executable, 'model/downstream/downstream_classification.py',
@@ -156,6 +149,8 @@ def run_downstream():
         '--lr', str(args.downstream_lr),
         '--csv_path', DATA_CSV,
         '--embeddings_path', RECON_DEMO_PATH, 
+        '--classifier_ckpt', os.path.join(CHECKPOINTS_DIR, 'classifier.pt'),
+        '--split_path', SPLIT_PATH,
         '--device', args.device
     ], check=True, env=ENV)
 
@@ -168,7 +163,9 @@ def run_downstream():
             '--progression_ckpt', os.path.join(CHECKPOINTS_DIR, f'prog_{name}.pt'),
             '--epochs', str(args.prog_epochs),
             '--csv_path', DATA_CSV,
+            '--hidden_dim', str(args.hidden_dim), # <--- ADD THIS LINE
             '--embeddings_path', RECON_DEMO_PATH,
+            '--split_path', SPLIT_PATH,
             '--device', args.device
         ], check=True, env=ENV)
 
@@ -181,6 +178,7 @@ def run_downstream():
             '--updrs_ckpt', os.path.join(CHECKPOINTS_DIR, f'static_{name}.pt'),
             '--epochs', str(args.updrs_epochs),
             '--csv_path', DATA_CSV,
+            '--split_path', SPLIT_PATH,
             '--embeddings_path', RECON_DEMO_PATH,
             '--device', args.device
         ], check=True, env=ENV)
@@ -190,4 +188,4 @@ if __name__ == '__main__':
     train_generator()
     run_smart_reconstruction() 
     run_downstream()
-    print('\n✅ Full ProM3E Pipeline Complete.')
+    print('\n Full GeNeuro Pipeline Complete.')

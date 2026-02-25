@@ -6,6 +6,11 @@ import os
 import csv
 import random
 from collections import Counter
+import argparse
+import numpy as np
+
+# --- NEW IMPORTS FOR METRICS ---
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, balanced_accuracy_score
 
 # Logic using Cohort codes (1=PD, 2=HC, 4=Prodromal)
 CLASS_NAMES = ["Control", "PD", "Prodromal"]
@@ -34,6 +39,7 @@ def load_csv_labels(csv_path):
 class SmartClassDataset(Dataset):
     def __init__(self, recon_demo_path, labels_dict, use_mask=True):
         self.samples = []
+        # Load once and keep on CPU to save VRAM for the model
         data = torch.load(recon_demo_path, map_location="cpu")
         mod_order = ["SPECT", "MRI", "fMRI", "DTI"]
         
@@ -45,7 +51,7 @@ class SmartClassDataset(Dataset):
             real_mods = patient_entry['real']
             
             # 1. Concatenate the 4 modalities
-            feat = torch.cat([hybrid_mods[m] for m in mod_order])
+            feat = torch.cat([hybrid_mods[m].flatten() for m in mod_order])
             
             # 2. Add availability mask
             if use_mask:
@@ -65,47 +71,71 @@ class Classifier(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
+            nn.GELU(), 
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 4),
             nn.BatchNorm1d(hidden_dim // 4),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout * 0.6),
             nn.Linear(hidden_dim // 4, 3)
         )
     def forward(self, x): return self.net(x)
 
-def evaluate(model, loader, device="cpu"):
+def evaluate(model, loader, device):
     model.eval()
-    preds, trues = [], []
+    preds, trues, probs = [], [], []
     with torch.no_grad():
         for x, y in loader:
-            preds.append(torch.argmax(model(x.to(device)), dim=1).cpu())
+            x, y = x.to(device, non_blocking=True), y.to(device)
+            logits = model(x)
+            
+            # Get probabilities for AUC
+            prob = F.softmax(logits, dim=1)
+            
+            preds.append(torch.argmax(logits, dim=1))
             trues.append(y)
-    if not preds: return {"bal_acc": 0}
-    preds, trues = torch.cat(preds), torch.cat(trues)
+            probs.append(prob)
+            
+    if not preds: 
+        return {"bal_acc": 0.0, "acc": 0.0, "f1_macro": 0.0, "auc_macro": 0.0}
+        
+    preds = torch.cat(preds).cpu().numpy()
+    trues = torch.cat(trues).cpu().numpy()
+    probs = torch.cat(probs).cpu().numpy()
     
-    conf = torch.zeros(3, 3, dtype=torch.int64)
-    for t, p in zip(trues, preds): conf[t, p] += 1
-    recall = torch.diag(conf).float() / conf.sum(dim=1).float().clamp_min(1)
-    return {"bal_acc": recall.mean().item(), "conf": conf}
+    # Calculate Sklearn Metrics
+    bal_acc = balanced_accuracy_score(trues, preds)
+    acc = accuracy_score(trues, preds)
+    f1_macro = f1_score(trues, preds, average='macro')
+    
+    # Multi-class AUC (One-vs-Rest)
+    try:
+        auc_macro = roc_auc_score(trues, probs, multi_class='ovr', average='macro')
+    except ValueError:
+        auc_macro = 0.0 # Failsafe if a class is entirely missing from a tiny validation fold
+        
+    return {
+        "bal_acc": bal_acc, 
+        "acc": acc, 
+        "f1_macro": f1_macro, 
+        "auc_macro": auc_macro
+    }
 
 def main():
-    import argparse
-    import os
-    import torch
-    
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv_path', required=True)
-    parser.add_argument('--embeddings_path', required=True) # Point this to recon_demo.pt
-    parser.add_argument('--classifier_ckpt', default='model/checkpoints/classifier.pt') # FIXED: Added checkpoint arg
-    parser.add_argument('--split_path', default='data/unified_split.txt')
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--embeddings_path', required=True)
+    parser.add_argument('--classifier_ckpt', required=True)
+    parser.add_argument('--split_path', required=True)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--batch_size', type=int, default=1024)
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--use_mask', action='store_true', default=True)
-    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--device', default='cuda')
     args = parser.parse_args()
+
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
     # 1. Load Split IDs
     train_ids, val_ids = set(), set()
@@ -121,58 +151,78 @@ def main():
     
     # 2. Load Data
     labels = load_csv_labels(args.csv_path)
-    dataset = SmartClassDataset(args.embeddings_path, labels, use_mask=args.use_mask)
+    full_dataset = SmartClassDataset(args.embeddings_path, labels, use_mask=args.use_mask)
     
-    train_idx = [i for i, s in enumerate(dataset.samples) if s[0] in train_ids]
-    val_idx = [i for i, s in enumerate(dataset.samples) if s[0] in val_ids]
+    train_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in train_ids]
+    val_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in val_ids]
     
-    train_loader = DataLoader(torch.utils.data.Subset(dataset, train_idx), batch_size=64, shuffle=True)
-    val_loader = DataLoader(torch.utils.data.Subset(dataset, val_idx), batch_size=256)
+    train_loader = DataLoader(
+        torch.utils.data.Subset(full_dataset, train_idx), 
+        batch_size=args.batch_size, shuffle=True,
+        num_workers=4, pin_memory=True
+    )
+    val_loader = DataLoader(
+        torch.utils.data.Subset(full_dataset, val_idx), 
+        batch_size=args.batch_size,
+        num_workers=2, pin_memory=True
+    )
 
     # 3. Handle Imbalance
-    counts = Counter([dataset.samples[i][1] for i in train_idx])
-    weights = torch.tensor([len(train_idx) / (3 * counts.get(i, 1)) for i in range(3)]).to(args.device)
+    counts = Counter([full_dataset.samples[i][1] for i in train_idx])
+    weights = torch.tensor([len(train_idx) / (3 * counts.get(i, 1)) for i in range(3)]).to(device)
 
-    # 4. Initialize Model (Dynamic Dimension)
-    if len(dataset) > 0:
-        input_dim = dataset[0][0].shape[0]
-    else:
-        input_dim = 4096 + (4 if args.use_mask else 0)
-
-    print(f"🚀 Classifier initialized with Input Dim: {input_dim}")
-    model = Classifier(input_dim, dropout=args.dropout).to(args.device)
+    input_dim = full_dataset[0][0].shape[0] if len(full_dataset) > 0 else 4100
     
+    print(f"🚀 Classifier Running on {device} | Input Dim: {input_dim}")
+    
+    model = Classifier(input_dim, dropout=args.dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
-    best_bal_acc = 0.0
-    best_state = None # FIXED: Properly initialize best_state
+    # --- BUG FIX: Initialize negative so it is guaranteed to save ---
+    best_bal_acc = -1.0
+    best_state = None
+    best_metrics = {}
 
     for epoch in range(args.epochs):
         model.train()
+        total_loss = 0
         for x, y in train_loader:
-            opt.zero_grad()
-            loss = criterion(model(x.to(args.device)), y.to(args.device))
+            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            opt.zero_grad(set_to_none=True)
+            loss = criterion(model(x), y)
             loss.backward()
             opt.step()
+            total_loss += loss.item()
         
-        metrics = evaluate(model, val_loader, args.device)
+        metrics = evaluate(model, val_loader, device)
+        
+        # Save based on best Balanced Accuracy
         if metrics['bal_acc'] > best_bal_acc:
             best_bal_acc = metrics['bal_acc']
-            # FIXED: Actually extract and clone the PyTorch weights
+            best_metrics = metrics  # Store all metrics for this absolute best epoch
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             
-        print(f"Epoch {epoch+1:02d} | Val Bal. Acc: {metrics['bal_acc']:.4f}")
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"Epoch {epoch+1:03d} | Loss: {total_loss/len(train_loader):.4f} | Val Bal. Acc: {metrics['bal_acc']:.4f}")
 
-    # FIXED: Save the correct dictionary to the correct file path
+    # --- PRINT RICH STATISTICS AT THE END ---
+    print(f"\n✅ Stage 3 Complete.")
+    print(f"Best Balanced Accuracy: {best_metrics.get('bal_acc', 0):.4f}")
+    print(f"Standard Accuracy:      {best_metrics.get('acc', 0):.4f}")
+    print(f"Macro F1-Score:         {best_metrics.get('f1_macro', 0):.4f}")
+    print(f"Macro AUC (OvR):        {best_metrics.get('auc_macro', 0):.4f}")
+
+    # Checkpoint Saving Logic
     if best_state is not None:
         os.makedirs(os.path.dirname(args.classifier_ckpt), exist_ok=True)
         torch.save({
-            "model_state": best_state, 
-            "input_dim": input_dim,        # Crucial for the explainer!
-            "best_bal_acc": best_bal_acc
+            "model_state": best_state,
+            "input_dim": input_dim,
+            "best_bal_acc": best_bal_acc,
+            "metrics": best_metrics # Optional: saves these to the .pt file too
         }, args.classifier_ckpt)
-        print(f"✅ Saved Best Classifier to {args.classifier_ckpt}")
+        print(f"✅ Saved best classifier weights to {args.classifier_ckpt}")
 
 if __name__ == "__main__":
     main()

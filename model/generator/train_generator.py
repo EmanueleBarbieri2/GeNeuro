@@ -136,7 +136,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--out', required=True)
-    parser.add_argument('--split_path', default='data/unified_split.txt')
+    parser.add_argument('--split_path', required=True)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--lambd', type=float, default=0.001)
@@ -167,7 +167,9 @@ if __name__ == "__main__":
         hidden_dim=args.hidden_dim, 
         num_heads=args.num_heads, 
         num_layers=args.num_layers,
-        num_registers=args.gen_num_registers if hasattr(args, 'gen_num_registers') else 4
+        num_registers=args.num_registers,
+        mlp_depth=args.mlp_depth,  # <--- ADD THIS
+        dropout=args.dropout       # <--- ADD THIS (just in case!)
     ).to(args.device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)

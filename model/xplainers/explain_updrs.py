@@ -58,10 +58,24 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = ProM3E_Generator(embed_dim=e_dim, num_layers=num_layers).to(device)
+        generator = generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = ProM3E_Generator(embed_dim=e_dim).to(device)
+        generator = generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
 
     # Auto-Detect Regressor Input Dimensions
     if not regressor_ckpt or not os.path.exists(regressor_ckpt):
@@ -153,10 +167,10 @@ def explain_subject_with_models(subject_id, data_root, encoders, generator, regr
     
     for mod, g in graphs.items():
         if hasattr(g, "x") and g.x.grad is not None:
-            results["node_importance"][mod] = g.x.grad.abs().sum(dim=1).cpu() 
-            results["node_value"][mod] = g.x.detach().cpu().sum(dim=1) 
-            results["node_grad"][mod] = g.x.grad.detach().cpu().sum(dim=1) 
-            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu().sum(dim=1) 
+            results["node_importance"][mod] = g.x.grad.abs().cpu() 
+            results["node_value"][mod] = g.x.detach().cpu()
+            results["node_grad"][mod] = g.x.grad.detach().cpu()
+            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu()
         if hasattr(g, "edge_attr") and g.edge_attr.grad is not None:
             results["edge_importance"][mod] = g.edge_attr.grad.abs().cpu() 
             results["edge_value"][mod] = g.edge_attr.detach().cpu() 

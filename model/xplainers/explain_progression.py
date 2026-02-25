@@ -55,10 +55,24 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = ProM3E_Generator(embed_dim=e_dim, num_layers=num_layers).to(device)
+        generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = ProM3E_Generator(embed_dim=e_dim).to(device)
+        generator = ProM3E_Generator(
+            embed_dim=e_dim,
+            hidden_dim=1024,
+            num_heads=8,
+            num_layers=5,
+            num_registers=0,
+            mlp_depth=3
+        ).to(device)
 
     # Load GRU Regressor Dynamically
     if not regressor_ckpt or not os.path.exists(regressor_ckpt):
@@ -111,16 +125,12 @@ def build_visit_feature(generator, available, delta_prev, expected_dim, device="
     
     # 3. Dynamic Mask and Time Attachment
     if expected_dim == x_base.shape[0] + 5:
-        # Model expects: 4096 features + 4 masks + 1 time gap
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device), torch.tensor([delta_prev], dtype=torch.float32, device=device)], dim=0)
     elif expected_dim == x_base.shape[0] + 4:
-        # Model expects: 4096 features + 4 masks (Your current model falls here!)
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device)], dim=0)
     elif expected_dim == x_base.shape[0] + 1:
-        # Model expects: 4096 features + 1 time gap
         x = torch.cat([x_base, torch.tensor([delta_prev], dtype=torch.float32, device=device)], dim=0)
     else:
-        # Model expects: strictly 4096 features
         x = x_base
         
     return x
@@ -142,7 +152,7 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
     history_visits = visits[: idx + 1]
 
     history_feats = []
-    dt_list = []  # <--- NEW: Track historical time gaps
+    dt_list = []  
     prev_year = None
     graphs_by_mod = {m: [] for m in MOD_ORDER}
 
@@ -159,7 +169,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                 g.edge_attr.requires_grad_(True)
             graphs_by_mod[mod].append(g)
             
-            # --- THE BATCHNORM FIX ---
             for module in encoders[mod].modules():
                 if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
                     module.eval()
@@ -168,7 +177,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                     if getattr(module, 'running_var', None) is None:
                         module.running_var = torch.ones(module.num_features, device=device)
                     module.track_running_stats = True
-            # -------------------------
             
             z = encoders[mod](g)
             available[mod] = z.squeeze(0)
@@ -178,7 +186,7 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
             continue
 
         delta_prev = 0.0 if prev_year is None else (v["year"] - prev_year)
-        dt_list.append(delta_prev)  # <--- NEW: Save the gap
+        dt_list.append(delta_prev)  
         
         feat = build_visit_feature(generator, available, delta_prev, regressor.input_dim, device=device)
         history_feats.append(feat)
@@ -193,10 +201,8 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
     dt_seq = torch.tensor([dt_list], dtype=torch.float32, device=device)
     delta_t_next = torch.tensor([[delta_t]], dtype=torch.float32, device=device)
 
-    # SWAPPED ARGUMENTS HERE:
     pred = regressor(seq, dt_seq, lengths, delta_t_next) 
     
-    # <--- FIXED: Safely grab the score whether the model outputs 1 target or 4
     score = pred[0, target_idx] if pred.shape[1] > 1 else pred[0, 0]
     score.backward()
 
@@ -218,9 +224,10 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
 
         for g in graphs:
             if hasattr(g, "x") and torch.is_tensor(g.x) and g.x.grad is not None:
-                node_vals.append(g.x.detach().cpu().sum(dim=1))
-                node_grads.append(g.x.grad.detach().cpu().sum(dim=1))
-                node_contribs.append((g.x.grad * g.x).detach().cpu().sum(dim=1))
+                # ---> CHANGED: Removed .sum(dim=1) to keep the 2D [Nodes, Features] shape <---
+                node_vals.append(g.x.detach().cpu())
+                node_grads.append(g.x.grad.detach().cpu())
+                node_contribs.append((g.x.grad * g.x).detach().cpu())
             if hasattr(g, "edge_attr") and torch.is_tensor(g.edge_attr) and g.edge_attr.grad is not None:
                 edge_val = g.edge_attr.detach().cpu()
                 edge_grad = g.edge_attr.grad.detach().cpu()
@@ -244,7 +251,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
             results["node_importance"][mod] = node_importance
 
         if edge_vals:
-            # Check if all visits have the exact same number of edges
             same_shape = all(e.shape == edge_vals[0].shape for e in edge_vals)
             
             if same_shape:
@@ -252,7 +258,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                 results["edge_grad"][mod] = torch.stack(edge_grads, dim=0).mean(dim=0)
                 results["edge_contrib"][mod] = torch.stack(edge_contribs, dim=0).mean(dim=0)
             else:
-                # If graph structure changes over time, extract the most recent visit's edges
                 results["edge_value"][mod] = edge_vals[-1]
                 results["edge_grad"][mod] = edge_grads[-1]
                 results["edge_contrib"][mod] = edge_contribs[-1]
@@ -266,7 +271,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
             results["edge_index"][mod] = edge_indices[-1]
 
     return results
-
 
 def main():
     pass

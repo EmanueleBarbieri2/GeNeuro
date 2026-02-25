@@ -70,20 +70,57 @@ def build_roi_info(index: int, atlas: List[Dict], lut: Dict, modality: str):
 
 def extract_topk_nodes(node_imp, node_val, node_grad, node_contrib, atlas, lut, mod, topk):
     if node_imp is None or node_imp.numel() == 0: return []
-    k = min(topk, node_imp.numel())
-    indices = torch.topk(node_imp, k).indices.tolist()
-    if isinstance(indices, int): indices = [indices]
+    
     results = []
-    for idx in indices:
-        info = build_roi_info(idx, atlas, lut, mod)
-        if not info: continue
-        info.update({
-            "importance": float(node_imp[idx].item() if node_imp.dim() > 0 else node_imp.item()),
-            "value_mean": float(node_val[idx].item() if node_val.dim() > 0 else node_val.item()),
-            "grad_mean": float(node_grad[idx].item() if node_grad.dim() > 0 else node_grad.item()),
-            "contrib_mean": float(node_contrib[idx].item() if node_contrib.dim() > 0 else node_contrib.item())
-        })
-        results.append(info)
+    
+    # SCENARIO A: 1D Tensor (e.g., SPECT which only has 1 feature, or previously summed data)
+    if node_imp.dim() == 1 or (node_imp.dim() == 2 and node_imp.shape[1] == 1):
+        node_imp = node_imp.view(-1)
+        k = min(topk, node_imp.numel())
+        indices = torch.topk(node_imp, k).indices.tolist()
+        if isinstance(indices, int): indices = [indices]
+        for idx in indices:
+            info = build_roi_info(idx, atlas, lut, mod)
+            if not info: continue
+            info.update({
+                "importance": float(node_imp[idx].item()),
+                "value_mean": float(node_val[idx].item() if node_val.dim()==1 else node_val[idx,0].item()),
+                "grad_mean": float(node_grad[idx].item() if node_grad.dim()==1 else node_grad[idx,0].item()),
+                "contrib_mean": float(node_contrib[idx].item() if node_contrib.dim()==1 else node_contrib[idx,0].item())
+            })
+            results.append(info)
+            
+    # SCENARIO B: 2D Tensor (e.g., MRI with Area, Thickness, Volume)
+    else:
+        N, F = node_imp.shape
+        flat_imp = node_imp.view(-1)
+        k = min(topk, flat_imp.numel())
+        flat_indices = torch.topk(flat_imp, k).indices.tolist()
+        if isinstance(flat_indices, int): flat_indices = [flat_indices]
+
+        # ---> EXACT FEATURE MAPPING APPLIED HERE <---
+        feature_names = ["Surface_Area", "Thickness", "Volume"]
+
+        for flat_idx in flat_indices:
+            node_idx = flat_idx // F
+            feat_idx = flat_idx % F
+            
+            info = build_roi_info(node_idx, atlas, lut, mod)
+            if not info: continue
+            
+            feat_name = feature_names[feat_idx] if feat_idx < len(feature_names) else f"Feat_{feat_idx}"
+            
+            # Append the specific feature name to the brain region name
+            info["roi_name"] = f"{info['roi_name']}_{feat_name}"
+            
+            info.update({
+                "importance": float(node_imp[node_idx, feat_idx].item()),
+                "value_mean": float(node_val[node_idx, feat_idx].item()),
+                "grad_mean": float(node_grad[node_idx, feat_idx].item()),
+                "contrib_mean": float(node_contrib[node_idx, feat_idx].item())
+            })
+            results.append(info)
+
     return results
 
 def extract_topk_edges(edge_imp, edge_val, edge_grad, edge_contrib, edge_index, atlas, lut, mod, topk):
@@ -113,19 +150,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", default="./data")
     parser.add_argument("--csv_path", default="./data/PPMI_Curated_Data_Cut_Public_20251112.csv")
-    parser.add_argument("--atlas", default="./atlas_centroids.csv")
-    parser.add_argument("--lut", default="./FreeSurferColorLUT.txt")
+    parser.add_argument("--atlas", default="/home/emanuele/Desktop/Studi/model/model/atlas_centroids.csv")
+    parser.add_argument("--lut", default="/home/emanuele/Desktop/Studi/model/model/FreeSurferColorLUT.txt")
     parser.add_argument("--out_dir", default="/home/emanuele/Desktop/Studi/model/model/xplainers/explainer_reports")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     
-    parser.add_argument("--encoder_ckpt", default="model/checkpoints/encoders.pt")
-    parser.add_argument("--generator_ckpt", default="model/checkpoints/prom3e_generator.pt")
-    parser.add_argument("--classifier_ckpt", default="model/checkpoints/classifier.pt")
+    parser.add_argument("--encoder_ckpt", default="model/checkpoints_master/encoders.pt")
+    parser.add_argument("--generator_ckpt", default="model/checkpoints_master/prom3e_generator.pt")
+    parser.add_argument("--classifier_ckpt", default="model/checkpoints_master/classifier.pt")
     
-    parser.add_argument("--updrs_u2_ckpt", default="model/checkpoints/static_U2_ADL.pt")
-    parser.add_argument("--updrs_u3_ckpt", default="model/checkpoints/static_U3_Motor.pt")
-    parser.add_argument("--prog_u2_ckpt", default="model/checkpoints/prog_U2_ADL.pt")
-    parser.add_argument("--prog_u3_ckpt", default="model/checkpoints/prog_U3_Motor.pt")
+    parser.add_argument("--updrs_u2_ckpt", default="model/checkpoints_master/static_U2_ADL.pt")
+    parser.add_argument("--updrs_u3_ckpt", default="model/checkpoints_master/static_U3_Motor.pt")
+    parser.add_argument("--prog_u2_ckpt", default="model/checkpoints_master/prog_U2_ADL.pt")
+    parser.add_argument("--prog_u3_ckpt", default="model/checkpoints_master/prog_U3_Motor.pt")
     
     parser.add_argument("--delta_t", type=float, default=1.0)
     parser.add_argument("--topk", type=int, default=15)

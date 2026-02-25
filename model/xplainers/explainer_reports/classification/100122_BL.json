@@ -1,0 +1,605 @@
+{
+  "subject_id": "100122_BL",
+  "task": "classification",
+  "true_label": "Prodromal",
+  "pred_label": "Prodromal",
+  "pred_prob": 0.8292255997657776,
+  "modalities": {
+    "MRI": {
+      "top_nodes": [
+        {
+          "node_index": 109,
+          "label": 2032,
+          "roi_name": "rh_frontalpole_Surface_Area",
+          "lut_name": "ctx-rh-frontalpole",
+          "importance": 0.00198869570158422,
+          "value_mean": 0.5919528007507324,
+          "grad_mean": -0.00198869570158422,
+          "contrib_mean": -0.0011772139696404338
+        },
+        {
+          "node_index": 73,
+          "label": 1032,
+          "roi_name": "lh_frontalpole_Surface_Area",
+          "lut_name": "ctx-lh-frontalpole",
+          "importance": 0.0019876647274941206,
+          "value_mean": 0.5898461937904358,
+          "grad_mean": -0.0019876647274941206,
+          "contrib_mean": -0.0011724164942279458
+        },
+        {
+          "node_index": 68,
+          "label": 1027,
+          "roi_name": "lh_rostralmiddlefrontal_Surface_Area",
+          "lut_name": "ctx-lh-rostralmiddlefrontal",
+          "importance": 0.0019875927828252316,
+          "value_mean": 0.5106382966041565,
+          "grad_mean": -0.0019875927828252316,
+          "contrib_mean": -0.0010149410227313638
+        },
+        {
+          "node_index": 43,
+          "label": 1002,
+          "roi_name": "lh_caudalanteriorcingulate_Surface_Area",
+          "lut_name": "ctx-lh-caudalanteriorcingulate",
+          "importance": 0.001979780849069357,
+          "value_mean": 0.46366122364997864,
+          "grad_mean": -0.001979780849069357,
+          "contrib_mean": -0.000917947618290782
+        },
+        {
+          "node_index": 104,
+          "label": 2027,
+          "roi_name": "rh_rostralmiddlefrontal_Surface_Area",
+          "lut_name": "ctx-rh-rostralmiddlefrontal",
+          "importance": 0.001964862924069166,
+          "value_mean": 0.4830418825149536,
+          "grad_mean": -0.001964862924069166,
+          "contrib_mean": -0.0009491110686212778
+        },
+        {
+          "node_index": 56,
+          "label": 1015,
+          "roi_name": "lh_middletemporal_Surface_Area",
+          "lut_name": "ctx-lh-middletemporal",
+          "importance": 0.001964250812307,
+          "value_mean": 0.6073309183120728,
+          "grad_mean": -0.001964250812307,
+          "contrib_mean": -0.0011929502943530679
+        },
+        {
+          "node_index": 86,
+          "label": 2009,
+          "roi_name": "rh_inferiortemporal_Surface_Area",
+          "lut_name": "ctx-rh-inferiortemporal",
+          "importance": 0.0019602456595748663,
+          "value_mean": 0.6043816804885864,
+          "grad_mean": -0.0019602456595748663,
+          "contrib_mean": -0.0011847366113215685
+        },
+        {
+          "node_index": 90,
+          "label": 2013,
+          "roi_name": "rh_lingual_Surface_Area",
+          "lut_name": "ctx-rh-lingual",
+          "importance": 0.001958835171535611,
+          "value_mean": 0.43627554178237915,
+          "grad_mean": -0.001958835171535611,
+          "contrib_mean": -0.0008545918972231448
+        },
+        {
+          "node_index": 69,
+          "label": 1028,
+          "roi_name": "lh_superiorfrontal_Surface_Area",
+          "lut_name": "ctx-lh-superiorfrontal",
+          "importance": 0.00195625820197165,
+          "value_mean": 0.578681230545044,
+          "grad_mean": -0.00195625820197165,
+          "contrib_mean": -0.0011320499470457435
+        },
+        {
+          "node_index": 36,
+          "label": 251,
+          "roi_name": "cc_posterior_Surface_Area",
+          "lut_name": "CC_Posterior",
+          "importance": 0.0019514757441356778,
+          "value_mean": 0.0,
+          "grad_mean": -0.0019514757441356778,
+          "contrib_mean": -0.0
+        },
+        {
+          "node_index": 92,
+          "label": 2015,
+          "roi_name": "rh_middletemporal_Surface_Area",
+          "lut_name": "ctx-rh-middletemporal",
+          "importance": 0.0019459831528365612,
+          "value_mean": 0.6176531910896301,
+          "grad_mean": -0.0019459831528365612,
+          "contrib_mean": -0.0012019426794722676
+        },
+        {
+          "node_index": 44,
+          "label": 1003,
+          "roi_name": "lh_caudalmiddlefrontal_Surface_Area",
+          "lut_name": "ctx-lh-caudalmiddlefrontal",
+          "importance": 0.001945955096744001,
+          "value_mean": 0.5637244582176208,
+          "grad_mean": -0.001945955096744001,
+          "contrib_mean": -0.0010969825088977814
+        },
+        {
+          "node_index": 96,
+          "label": 2019,
+          "roi_name": "rh_parsorbitalis_Surface_Area",
+          "lut_name": "ctx-rh-parsorbitalis",
+          "importance": 0.0019458660390228033,
+          "value_mean": 0.5472930073738098,
+          "grad_mean": -0.0019458660390228033,
+          "contrib_mean": -0.0010649588657543063
+        },
+        {
+          "node_index": 34,
+          "label": 77,
+          "roi_name": "wm_hypointensities_Surface_Area",
+          "lut_name": "WM-hypointensities",
+          "importance": 0.0019455940928310156,
+          "value_mean": 0.0,
+          "grad_mean": -0.0019455940928310156,
+          "contrib_mean": -0.0
+        },
+        {
+          "node_index": 53,
+          "label": 1012,
+          "roi_name": "lh_lateralorbitofrontal_Surface_Area",
+          "lut_name": "ctx-lh-lateralorbitofrontal",
+          "importance": 0.0019445506623014808,
+          "value_mean": 0.5742574334144592,
+          "grad_mean": -0.0019445506623014808,
+          "contrib_mean": -0.0011166726471856236
+        }
+      ],
+      "top_edges": []
+    },
+    "fMRI": {
+      "top_nodes": [
+        {
+          "node_index": 95,
+          "label": 2018,
+          "roi_name": "rh_parsopercularis_Volume",
+          "lut_name": "ctx-rh-parsopercularis",
+          "importance": 0.00037222178070805967,
+          "value_mean": 12.65496826171875,
+          "grad_mean": -0.00037222178070805967,
+          "contrib_mean": -0.00471045495942235
+        },
+        {
+          "node_index": 101,
+          "label": 2024,
+          "roi_name": "rh_precentral_Volume",
+          "lut_name": "ctx-rh-precentral",
+          "importance": 0.0003173754084855318,
+          "value_mean": 42.559715270996094,
+          "grad_mean": -0.0003173754084855318,
+          "contrib_mean": -0.013507407158613205
+        },
+        {
+          "node_index": 19,
+          "label": 41,
+          "roi_name": "right_cerebral_white_matter_Volume",
+          "lut_name": "Right-Cerebral-White-Matter",
+          "importance": 0.00030924059683457017,
+          "value_mean": 18.160612106323242,
+          "grad_mean": -0.00030924059683457017,
+          "contrib_mean": -0.005615998525172472
+        },
+        {
+          "node_index": 85,
+          "label": 2008,
+          "roi_name": "rh_inferiorparietal_Volume",
+          "lut_name": "ctx-rh-inferiorparietal",
+          "importance": 0.0003090127429459244,
+          "value_mean": 28.861576080322266,
+          "grad_mean": -0.0003090127429459244,
+          "contrib_mean": -0.00891859456896782
+        },
+        {
+          "node_index": 99,
+          "label": 2022,
+          "roi_name": "rh_postcentral_Volume",
+          "lut_name": "ctx-rh-postcentral",
+          "importance": 0.000291493721306324,
+          "value_mean": 42.762386322021484,
+          "grad_mean": -0.000291493721306324,
+          "contrib_mean": -0.012464967556297779
+        },
+        {
+          "node_index": 96,
+          "label": 2019,
+          "roi_name": "rh_parsorbitalis_Volume",
+          "lut_name": "ctx-rh-parsorbitalis",
+          "importance": 0.0002897818631026894,
+          "value_mean": -11.384357452392578,
+          "grad_mean": -0.0002897818631026894,
+          "contrib_mean": 0.0032989804167300463
+        },
+        {
+          "node_index": 107,
+          "label": 2030,
+          "roi_name": "rh_superiortemporal_Volume",
+          "lut_name": "ctx-rh-superiortemporal",
+          "importance": 0.00028453164850361645,
+          "value_mean": -7.030704975128174,
+          "grad_mean": -0.00028453164850361645,
+          "contrib_mean": 0.0020004580728709698
+        },
+        {
+          "node_index": 89,
+          "label": 2012,
+          "roi_name": "rh_lateralorbitofrontal_Volume",
+          "lut_name": "ctx-rh-lateralorbitofrontal",
+          "importance": 0.0002826093987096101,
+          "value_mean": -17.79417610168457,
+          "grad_mean": -0.0002826093987096101,
+          "contrib_mean": 0.005028801504522562
+        },
+        {
+          "node_index": 92,
+          "label": 2015,
+          "roi_name": "rh_middletemporal_Volume",
+          "lut_name": "ctx-rh-middletemporal",
+          "importance": 0.000281493499642238,
+          "value_mean": -15.733874320983887,
+          "grad_mean": -0.000281493499642238,
+          "contrib_mean": 0.004428983200341463
+        },
+        {
+          "node_index": 111,
+          "label": 2034,
+          "roi_name": "rh_transversetemporal_Volume",
+          "lut_name": "ctx-rh-transversetemporal",
+          "importance": 0.00027497560949996114,
+          "value_mean": 7.02222204208374,
+          "grad_mean": -0.00027497560949996114,
+          "contrib_mean": -0.001930939732119441
+        },
+        {
+          "node_index": 108,
+          "label": 2031,
+          "roi_name": "rh_supramarginal_Volume",
+          "lut_name": "ctx-rh-supramarginal",
+          "importance": 0.000273907178780064,
+          "value_mean": 30.458152770996094,
+          "grad_mean": -0.000273907178780064,
+          "contrib_mean": -0.008342706598341465
+        },
+        {
+          "node_index": 79,
+          "label": 2002,
+          "roi_name": "rh_caudalanteriorcingulate_Volume",
+          "lut_name": "ctx-rh-caudalanteriorcingulate",
+          "importance": 0.0002716231101658195,
+          "value_mean": 26.961057662963867,
+          "grad_mean": -0.0002716231101658195,
+          "contrib_mean": -0.0073232464492321014
+        },
+        {
+          "node_index": 88,
+          "label": 2011,
+          "roi_name": "rh_lateraloccipital_Volume",
+          "lut_name": "ctx-rh-lateraloccipital",
+          "importance": 0.00027135410346090794,
+          "value_mean": -1.3388779163360596,
+          "grad_mean": -0.00027135410346090794,
+          "contrib_mean": 0.00036331001319922507
+        },
+        {
+          "node_index": 82,
+          "label": 2005,
+          "roi_name": "rh_cuneus_Volume",
+          "lut_name": "ctx-rh-cuneus",
+          "importance": 0.00027095433324575424,
+          "value_mean": 19.401575088500977,
+          "grad_mean": -0.00027095433324575424,
+          "contrib_mean": -0.005256940610706806
+        },
+        {
+          "node_index": 110,
+          "label": 2033,
+          "roi_name": "rh_temporalpole_Volume",
+          "lut_name": "ctx-rh-temporalpole",
+          "importance": 0.00027022630092687905,
+          "value_mean": -35.300514221191406,
+          "grad_mean": -0.00027022630092687905,
+          "contrib_mean": 0.009539127349853516
+        }
+      ],
+      "top_edges": [
+        {
+          "edge_index": 10049,
+          "u": {
+            "node_index": 88,
+            "label": 2011,
+            "roi_name": "rh_lateraloccipital",
+            "lut_name": "ctx-rh-lateraloccipital"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.000962848833296448,
+          "value": -0.03707833215594292,
+          "grad": -0.000962848833296448,
+          "contrib": 3.5700828448170796e-05
+        },
+        {
+          "edge_index": 6207,
+          "u": {
+            "node_index": 54,
+            "label": 1013,
+            "roi_name": "lh_lingual",
+            "lut_name": "ctx-lh-lingual"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009622887591831386,
+          "value": -0.4050754904747009,
+          "grad": -0.0009622887591831386,
+          "contrib": 0.00038979959208518267
+        },
+        {
+          "edge_index": 5529,
+          "u": {
+            "node_index": 48,
+            "label": 1007,
+            "roi_name": "lh_fusiform",
+            "lut_name": "ctx-lh-fusiform"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009610186098143458,
+          "value": -0.035540152341127396,
+          "grad": -0.0009610186098143458,
+          "contrib": 3.415474930079654e-05
+        },
+        {
+          "edge_index": 1461,
+          "u": {
+            "node_index": 12,
+            "label": 17,
+            "roi_name": "left_hippocampus",
+            "lut_name": "Left-Hippocampus"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009604441584087908,
+          "value": -0.16817782819271088,
+          "grad": -0.0009604441584087908,
+          "contrib": 0.0001615254150237888
+        },
+        {
+          "edge_index": 9710,
+          "u": {
+            "node_index": 85,
+            "label": 2008,
+            "roi_name": "rh_inferiorparietal",
+            "lut_name": "ctx-rh-inferiorparietal"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009602110949344933,
+          "value": -0.3571449816226959,
+          "grad": -0.0009602110949344933,
+          "contrib": 0.0003429345670156181
+        },
+        {
+          "edge_index": 783,
+          "u": {
+            "node_index": 6,
+            "label": 11,
+            "roi_name": "left_caudate",
+            "lut_name": "Left-Caudate"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.000959028722718358,
+          "value": -0.1490807682275772,
+          "grad": -0.000959028722718358,
+          "contrib": 0.00014297274174168706
+        },
+        {
+          "edge_index": 2478,
+          "u": {
+            "node_index": 21,
+            "label": 44,
+            "roi_name": "right_inf_lat_vent",
+            "lut_name": "Right-Inf-Lat-Vent"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009569411631673574,
+          "value": -0.23711572587490082,
+          "grad": -0.0009569411631673574,
+          "contrib": 0.0002269058022648096
+        },
+        {
+          "edge_index": 10953,
+          "u": {
+            "node_index": 96,
+            "label": 2019,
+            "roi_name": "rh_parsorbitalis",
+            "lut_name": "ctx-rh-parsorbitalis"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009566113003529608,
+          "value": -0.34986236691474915,
+          "grad": -0.0009566113003529608,
+          "contrib": 0.00033468229230493307
+        },
+        {
+          "edge_index": 331,
+          "u": {
+            "node_index": 2,
+            "label": 5,
+            "roi_name": "left_inf_lat_vent",
+            "lut_name": "Left-Inf-Lat-Vent"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.000956559379119426,
+          "value": -0.391137033700943,
+          "grad": -0.000956559379119426,
+          "contrib": 0.0003741458058357239
+        },
+        {
+          "edge_index": 2026,
+          "u": {
+            "node_index": 17,
+            "label": 30,
+            "roi_name": "left_vessel",
+            "lut_name": "Left-vessel"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009553921408951283,
+          "value": -0.0555308535695076,
+          "grad": -0.0009553921408951283,
+          "contrib": 5.3053739975439385e-05
+        },
+        {
+          "edge_index": 2139,
+          "u": {
+            "node_index": 18,
+            "label": 31,
+            "roi_name": "left_choroid_plexus",
+            "lut_name": "Left-choroid-plexus"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.000954178161919117,
+          "value": -0.4038631319999695,
+          "grad": -0.000954178161919117,
+          "contrib": 0.00038535738713108003
+        },
+        {
+          "edge_index": 2930,
+          "u": {
+            "node_index": 25,
+            "label": 50,
+            "roi_name": "right_caudate",
+            "lut_name": "Right-Caudate"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009541069157421589,
+          "value": -0.05556314066052437,
+          "grad": -0.0009541069157421589,
+          "contrib": 5.301317651174031e-05
+        },
+        {
+          "edge_index": 3382,
+          "u": {
+            "node_index": 29,
+            "label": 54,
+            "roi_name": "right_amygdala",
+            "lut_name": "Right-Amygdala"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009532513795420527,
+          "value": -0.403531551361084,
+          "grad": -0.0009532513795420527,
+          "contrib": 0.00038466701516881585
+        },
+        {
+          "edge_index": 3947,
+          "u": {
+            "node_index": 34,
+            "label": 77,
+            "roi_name": "wm_hypointensities",
+            "lut_name": "WM-hypointensities"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009525283239781857,
+          "value": -0.47001373767852783,
+          "grad": -0.0009525283239781857,
+          "contrib": 0.00044770140084438026
+        },
+        {
+          "edge_index": 10501,
+          "u": {
+            "node_index": 92,
+            "label": 2015,
+            "roi_name": "rh_middletemporal",
+            "lut_name": "ctx-rh-middletemporal"
+          },
+          "v": {
+            "node_index": 105,
+            "label": 2028,
+            "roi_name": "rh_superiorfrontal",
+            "lut_name": "ctx-rh-superiorfrontal"
+          },
+          "importance": 0.0009518529986962676,
+          "value": -0.002991769928485155,
+          "grad": -0.0009518529986962676,
+          "contrib": 2.847725227184128e-06
+        }
+      ]
+    }
+  }
+}
