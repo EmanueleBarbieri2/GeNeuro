@@ -3,7 +3,7 @@ import torch
 from torch_geometric.data import Data, Batch
 
 from model.encoders import SPECTEncoder, MRIEncoder, DTIEncoder, fMRIEncoder
-from model.generator.generator import ProM3E_Generator
+from model.generator.generator import Generator
 try:
     from model.downstream.downstream_classification import Classifier, CLASS_NAMES
 except ImportError:
@@ -56,7 +56,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = generator = ProM3E_Generator(
+        generator = generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,
@@ -66,7 +66,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = generator = ProM3E_Generator(
+        generator = generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,

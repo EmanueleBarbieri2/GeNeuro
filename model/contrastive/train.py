@@ -41,7 +41,7 @@ class NeuroTrainer:
         self.beta = beta   
         self.optimizer = torch.optim.AdamW(self.models.parameters(), lr=lr)
 
-    def prom3e_loss(self, z_spoke, z_hub):
+    def generator_loss(self, z_spoke, z_hub):
         z_spoke = F.normalize(z_spoke, p=2, dim=1)
         z_hub = F.normalize(z_hub, p=2, dim=1)
         
@@ -63,7 +63,7 @@ class NeuroTrainer:
                 loaders.append((spoke, DataLoader(ds, batch_size=self.batch_size, 
                                                  shuffle=True, collate_fn=multimodal_collate)))
 
-        print(f"🚀 ProM3E Stage 1 | Hub: {self.hub_name} | Batch: {self.batch_size} | Threshold={self.models['fMRI'].threshold}")
+        print(f"🚀 Stage 1 | Hub: {self.hub_name} | Batch: {self.batch_size} | Threshold={self.models['fMRI'].threshold}")
         
         for epoch in range(epochs):
             self.models.train()
@@ -76,7 +76,7 @@ class NeuroTrainer:
                     z_spoke = self.models[spoke_name](batch[spoke_name].to(self.device))
                     z_hub = self.models[self.hub_name](batch[self.hub_name].to(self.device))
                     
-                    loss = self.prom3e_loss(z_spoke, z_hub)
+                    loss = self.generator_loss(z_spoke, z_hub)
                     
                     self.optimizer.zero_grad()
                     loss.backward()

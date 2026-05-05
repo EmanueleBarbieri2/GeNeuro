@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch_geometric.data import Data, Batch
 
 from model.encoders import SPECTEncoder, MRIEncoder, DTIEncoder, fMRIEncoder
-from model.generator.generator import ProM3E_Generator
+from model.generator.generator import Generator
 from model.generator.run_generator_demo import hallucinate_missing_modalities
 from model.downstream.downstream_progression import ForecastingGRU, load_csv_visits, parse_year 
 
@@ -55,7 +55,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = ProM3E_Generator(
+        generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,
@@ -65,7 +65,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = ProM3E_Generator(
+        generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,

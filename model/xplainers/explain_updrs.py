@@ -6,7 +6,7 @@ from torch_geometric.data import Data, Batch
 
 from model.encoders import SPECTEncoder, MRIEncoder, DTIEncoder, fMRIEncoder
 from model.downstream.downstream_updrs import Regressor
-from model.generator.generator import ProM3E_Generator
+from model.generator.generator import Generator
 
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 TARGETS = ["updrs1_score", "updrs2_score", "updrs3_score", "updrs4_score"]
@@ -58,7 +58,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
         num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = generator = ProM3E_Generator(
+        generator = generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,
@@ -68,7 +68,7 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = generator = ProM3E_Generator(
+        generator = generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,

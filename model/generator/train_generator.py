@@ -7,7 +7,7 @@ from collections import defaultdict
 import random
 import numpy as np
 import argparse
-from model.generator.generator import ProM3E_Generator
+from model.generator.generator import Generator
 
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 
@@ -32,7 +32,7 @@ def compute_kl(mu, logvar):
     kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=-1)
     return kl.mean()
 
-def prom3e_recon_loss(pred_f, ground_truth_f, alpha, beta):
+def generator_recon_loss(pred_f, ground_truth_f, alpha, beta):
     """Contrastive cross-entropy loss based on pairwise distances."""
     dists = torch.cdist(pred_f, ground_truth_f, p=2)
     logits = alpha * dists + beta
@@ -118,7 +118,7 @@ def run_step(model, batch_embeddings, real_missing_mask, optimizer=None,
     for i in range(4):
         active = ~real_missing_mask[:, i]
         if active.any():
-            recon_total += prom3e_recon_loss(z_recon[active, i, :], batch_embeddings[active, i, :], alpha, beta)
+            recon_total += generator_recon_loss(z_recon[active, i, :], batch_embeddings[active, i, :], alpha, beta)
             mod_count += 1
     avg_recon = recon_total / max(mod_count, 1)
 
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
     payload = torch.load(args.embeddings_path, map_location="cpu")
-    model = ProM3E_Generator(
+    model = Generator(
         embed_dim=payload["embeddings"].size(1), 
         hidden_dim=args.hidden_dim, 
         num_heads=args.num_heads, 

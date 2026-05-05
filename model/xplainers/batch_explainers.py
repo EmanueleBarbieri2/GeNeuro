@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     
     parser.add_argument("--encoder_ckpt", default="model/checkpoints_master/encoders.pt")
-    parser.add_argument("--generator_ckpt", default="model/checkpoints_master/prom3e_generator.pt")
+    parser.add_argument("--generator_ckpt", default="model/checkpoints_master/generator.pt")
     parser.add_argument("--classifier_ckpt", default="model/checkpoints_master/classifier.pt")
     
     parser.add_argument("--updrs_u2_ckpt", default="model/checkpoints_master/static_U2_ADL.pt")
@@ -177,7 +177,7 @@ def main():
     subject_ids = sorted(list(load_valid_subject_ids_from_csv(args.csv_path)))
     if args.limit: subject_ids = subject_ids[:args.limit]
 
-    print(f"🚀 Initializing ProM3E Explainability Pipeline on {args.device} for {len(subject_ids)} subjects...")
+    print(f"🚀 Initializing Explainability Pipeline on {args.device} for {len(subject_ids)} subjects...")
 
     cls_tools = None
     updrs_encoders, updrs_gen, updrs_heads = None, None, {}

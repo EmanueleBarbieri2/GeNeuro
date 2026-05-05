@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ProM3E_Generator(nn.Module):
+class Generator(nn.Module):
     def __init__(self, embed_dim=1024, hidden_dim=512, num_heads=8, 
                  num_layers=3, num_registers=4, mlp_depth=2, dropout=0.1):
         super().__init__()

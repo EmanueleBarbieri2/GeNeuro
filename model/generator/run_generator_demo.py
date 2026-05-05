@@ -1,7 +1,7 @@
 import torch
 import os
 from collections import defaultdict
-from model.generator.generator import ProM3E_Generator
+from model.generator.generator import Generator
 
 def load_embeddings(path):
     """Loads stage 1 embeddings and metadata."""
@@ -62,7 +62,7 @@ def main():
     # 3. Initialize Model with CORRECT architecture
     print(f"🧠 Loading Generator ({args.num_layers}L, {args.hidden_dim}H) from {args.generator_ckpt}...")
     
-    model = ProM3E_Generator(
+    model = Generator(
         embed_dim=actual_embed_dim,
         hidden_dim=args.hidden_dim,
         num_heads=args.num_heads,

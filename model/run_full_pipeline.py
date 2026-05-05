@@ -6,7 +6,7 @@ import os
 import argparse
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Full ProM3E pipeline with Smart Hybrid Fusion.")
+    parser = argparse.ArgumentParser(description="Full pipeline with Smart Hybrid Fusion.")
     
     # --- Paths & General ---
     parser.add_argument('--data_csv', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'PPMI_Curated_Data_Cut_Public_20251112.csv')))
@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument('--threshold', type=float, default=0.60)         
     parser.add_argument('--no_contrastive_aug', action='store_true')
     
-    # --- Stage 2: ProM3E Generator ---
+    # --- Stage 2: Generator ---
     parser.add_argument('--generator_epochs', type=int, default=100)
     parser.add_argument('--generator_lr', type=float, default=0.000012)     
     parser.add_argument('--generator_weight_decay', type=float, default=0.004) 
@@ -67,7 +67,7 @@ DATA_ROOT = os.path.abspath(os.path.join(BASE_DIR, '..', 'data'))
 
 EMBEDDINGS_PATH = os.path.join(CHECKPOINTS_DIR, 'embeddings.pt')
 ENCODER_CKPT = os.path.join(CHECKPOINTS_DIR, 'encoders.pt')
-GENERATOR_CKPT = os.path.join(CHECKPOINTS_DIR, 'prom3e_generator.pt')
+GENERATOR_CKPT = os.path.join(CHECKPOINTS_DIR, 'generator.pt')
 RECON_DEMO_PATH = os.path.join(CHECKPOINTS_DIR, 'recon_demo.pt')
 
 ENV = os.environ.copy()
@@ -99,7 +99,7 @@ def run_contrastive():
     subprocess.run(cmd, check=True, env=ENV)
 
 def train_generator():
-    print(f"\n STAGE 2: ProM3E Generator ({args.generator_divergence.upper()})")
+    print(f"\n STAGE 2: Generator ({args.generator_divergence.upper()})")
     cmd = [
         sys.executable, 'model/generator/train_generator.py',
         '--out', GENERATOR_CKPT,
