@@ -9,13 +9,13 @@ from collections import Counter
 import argparse
 import numpy as np
 
-# --- NEW IMPORTS FOR METRICS ---
+# --- IMPORTS FOR METRICS ---
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, balanced_accuracy_score
 
-# Logic using Cohort codes (1=PD, 2=HC, 4=Prodromal)
+# Default global for external imports (like explainers)
 CLASS_NAMES = ["Control", "PD", "Prodromal"]
 
-def load_csv_labels(csv_path):
+def load_csv_labels(csv_path, drop_prodromal=False):
     labels = {}
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
@@ -31,42 +31,86 @@ def load_csv_labels(csv_path):
             label = None
             if c == 1: label = "PD"
             elif c == 2: label = "Control"
-            elif c == 4: label = "Prodromal"
+            elif c == 4: 
+                if drop_prodromal: continue
+                label = "Prodromal"
             
             if label: labels[f"{patno}_{event_id}"] = label
     return labels
 
 class SmartClassDataset(Dataset):
-    def __init__(self, recon_demo_path, labels_dict, use_mask=True):
+    # 🌟 ADDED: ablate_modality and ablate_ratio to init signature
+    def __init__(self, embeddings_path, labels_dict, active_mods, class_names, use_mask=True, zero_impute=False, ablate_modality=None, ablate_ratio=None):
         self.samples = []
-        # Load once and keep on CPU to save VRAM for the model
-        data = torch.load(recon_demo_path, map_location="cpu")
-        mod_order = ["SPECT", "MRI", "fMRI", "DTI"]
+        data = torch.load(embeddings_path, map_location="cpu")
         
-        for key, label in labels_dict.items():
-            if key not in data: continue
-            
-            patient_entry = data[key] 
-            hybrid_mods = patient_entry['recon']
-            real_mods = patient_entry['real']
-            
-            # 1. Concatenate the 4 modalities
-            feat = torch.cat([hybrid_mods[m].flatten() for m in mod_order])
-            
-            # 2. Add availability mask
-            if use_mask:
-                mask = torch.tensor([1.0 if m in real_mods else 0.0 for m in mod_order])
-                x = torch.cat([feat, mask])
-            else:
-                x = feat
+        is_raw = "embeddings" in data and "labels" in data and "ids" in data
+        mod_to_idx = {mod: i for i, mod in enumerate(active_mods)}
+        
+        if is_raw:
+            pt_data = {}
+            for i, (emb, label, pid) in enumerate(zip(data["embeddings"], data["labels"], data["ids"])):
+                if pid not in pt_data: pt_data[pid] = {}
+                pt_data[pid][label] = emb
+
+            for key, label in labels_dict.items():
+                if key not in pt_data: continue
                 
-            self.samples.append((key, CLASS_NAMES.index(label), x))
+                patient_mods = pt_data[key]
+                feat_list, mask_list = [], []
+                
+                for m in active_mods:
+                    if m in patient_mods:
+                        feat_list.append(patient_mods[m].flatten())
+                        mask_list.append(0.0)
+                    else:
+                        feat_list.append(torch.zeros(1024))
+                        mask_list.append(1.0)
+                        
+                feat = torch.cat(feat_list)
+                
+                # 🌟 DYNAMIC ABLATION LOGIC FOR RAW 🌟
+                if ablate_modality in mod_to_idx and ablate_ratio is not None:
+                    if np.random.rand() > ablate_ratio:
+                        m_idx = mod_to_idx[ablate_modality]
+                        feat[m_idx*1024 : (m_idx+1)*1024] = 0
+                        mask_list[m_idx] = 1.0 # Set mask to missing
+                
+                x = torch.cat([feat, torch.tensor(mask_list)]) if use_mask else feat
+                self.samples.append((key, class_names.index(label), x))
+                
+        else:
+            for key, label in labels_dict.items():
+                if key not in data: continue
+                
+                patient_entry = data[key] 
+                hybrid_mods = patient_entry['recon']
+                real_mods = patient_entry['real']
+                
+                feat_list = [hybrid_mods[m].flatten() for m in active_mods]
+                feat = torch.cat(feat_list)
+                mask_list = [1.0 if m not in real_mods else 0.0 for m in active_mods]
+                
+                # 🌟 DYNAMIC ABLATION LOGIC FOR GENERATED 🌟
+                if ablate_modality in mod_to_idx and ablate_ratio is not None:
+                    if np.random.rand() > ablate_ratio: # e.g., if rand > 0.1, we ZERO IT OUT (keeps 10%)
+                        m_idx = mod_to_idx[ablate_modality]
+                        feat[m_idx*1024 : (m_idx+1)*1024] = 0
+                        mask_list[m_idx] = 1.0 # Set mask to missing
+                
+                if use_mask:
+                    mask = torch.tensor(mask_list)
+                    x = torch.cat([feat, mask])
+                else:
+                    x = feat
+                    
+                self.samples.append((key, class_names.index(label), x))
 
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx): return self.samples[idx][2], self.samples[idx][1]
 
 class Classifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim=512, dropout=0.5):
+    def __init__(self, input_dim, hidden_dim=512, dropout=0.5, num_classes=3):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -77,19 +121,17 @@ class Classifier(nn.Module):
             nn.BatchNorm1d(hidden_dim // 4),
             nn.GELU(),
             nn.Dropout(dropout * 0.6),
-            nn.Linear(hidden_dim // 4, 3)
+            nn.Linear(hidden_dim // 4, num_classes) # <-- Dynamic classes
         )
     def forward(self, x): return self.net(x)
 
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, num_classes):
     model.eval()
     preds, trues, probs = [], [], []
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device, non_blocking=True), y.to(device)
             logits = model(x)
-            
-            # Get probabilities for AUC
             prob = F.softmax(logits, dim=1)
             
             preds.append(torch.argmax(logits, dim=1))
@@ -103,23 +145,20 @@ def evaluate(model, loader, device):
     trues = torch.cat(trues).cpu().numpy()
     probs = torch.cat(probs).cpu().numpy()
     
-    # Calculate Sklearn Metrics
     bal_acc = balanced_accuracy_score(trues, preds)
     acc = accuracy_score(trues, preds)
     f1_macro = f1_score(trues, preds, average='macro')
     
-    # Multi-class AUC (One-vs-Rest)
     try:
-        auc_macro = roc_auc_score(trues, probs, multi_class='ovr', average='macro')
+        # Dynamic AUC based on binary vs multi-class
+        if num_classes == 2:
+            auc_macro = roc_auc_score(trues, probs[:, 1])
+        else:
+            auc_macro = roc_auc_score(trues, probs, multi_class='ovr', average='macro')
     except ValueError:
-        auc_macro = 0.0 # Failsafe if a class is entirely missing from a tiny validation fold
+        auc_macro = 0.0 
         
-    return {
-        "bal_acc": bal_acc, 
-        "acc": acc, 
-        "f1_macro": f1_macro, 
-        "auc_macro": auc_macro
-    }
+    return {"bal_acc": bal_acc, "acc": acc, "f1_macro": f1_macro, "auc_macro": auc_macro}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -133,11 +172,31 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.5)
     parser.add_argument('--use_mask', action='store_true', default=True)
     parser.add_argument('--device', default='cuda')
+    
+    parser.add_argument('--exclude_modality', nargs='+', default=None)
+    parser.add_argument('--disable_generator', action='store_true')
+    parser.add_argument('--drop_prodromal', action='store_true', help="Convert to Binary PD vs Control")
+    
+    # 🌟 ADDED: The required arguments to accept commands from the orchestrator
+    parser.add_argument('--ablate_modality', type=str, choices=['fMRI', 'DTI', 'MRI', 'SPECT'])
+    parser.add_argument('--ablate_ratio', type=float)
+    
     args = parser.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    # 1. Load Split IDs
+    active_mods = ["SPECT", "MRI", "fMRI", "DTI"]
+    if args.exclude_modality:
+        active_mods = [m for m in active_mods if m not in args.exclude_modality]
+
+    # --- Handle Class Logic ---
+    if args.drop_prodromal:
+        print("⚠️ ABLATION: Dropping 'Prodromal' class for Binary Classification.")
+        current_class_names = ["Control", "PD"]
+    else:
+        current_class_names = ["Control", "PD", "Prodromal"]
+    num_classes = len(current_class_names)
+
     train_ids, val_ids = set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
@@ -149,40 +208,46 @@ def main():
                     if mode == 'train': train_ids.add(line)
                     else: val_ids.add(line)
     
-    # 2. Load Data
-    labels = load_csv_labels(args.csv_path)
-    full_dataset = SmartClassDataset(args.embeddings_path, labels, use_mask=args.use_mask)
+    labels = load_csv_labels(args.csv_path, drop_prodromal=args.drop_prodromal)
     
+    # 🌟 ADDED: Pass the ablate flags directly into your SmartClassDataset
+    full_dataset = SmartClassDataset(
+        args.embeddings_path, labels, active_mods, class_names=current_class_names,
+        use_mask=args.use_mask, zero_impute=args.disable_generator,
+        ablate_modality=args.ablate_modality, ablate_ratio=args.ablate_ratio
+    )
+    
+    if len(full_dataset) == 0:
+        print("❌ Error: Dataset is empty after filtering.")
+        return
+
     train_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in train_ids]
     val_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in val_ids]
-    
-    train_loader = DataLoader(
-        torch.utils.data.Subset(full_dataset, train_idx), 
-        batch_size=args.batch_size, shuffle=True,
-        num_workers=4, pin_memory=True
-    )
-    val_loader = DataLoader(
-        torch.utils.data.Subset(full_dataset, val_idx), 
-        batch_size=args.batch_size,
-        num_workers=2, pin_memory=True
-    )
 
-    # 3. Handle Imbalance
+    # 🌟 PRESERVED DIAGNOSTIC BLOCK 🌟
+    train_labels = [current_class_names[full_dataset.samples[i][1]] for i in train_idx]
+    val_labels = [current_class_names[full_dataset.samples[i][1]] for i in val_idx]
+    
+    print("\n📊 DATASET DIAGNOSTICS:")
+    print(f"   Train Set: {len(train_idx)} visits -> {dict(Counter(train_labels))}")
+    print(f"   Val Set:   {len(val_idx)} visits -> {dict(Counter(val_labels))}\n")
+    # 🌟 ------------------------ 🌟
+    
+    train_loader = DataLoader(torch.utils.data.Subset(full_dataset, train_idx), batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(torch.utils.data.Subset(full_dataset, val_idx), batch_size=args.batch_size)
+
     counts = Counter([full_dataset.samples[i][1] for i in train_idx])
-    weights = torch.tensor([len(train_idx) / (3 * counts.get(i, 1)) for i in range(3)]).to(device)
+    weights = torch.tensor([len(train_idx) / (num_classes * counts.get(i, 1)) for i in range(num_classes)]).to(device)
 
-    input_dim = full_dataset[0][0].shape[0] if len(full_dataset) > 0 else 4100
+    input_dim = full_dataset[0][0].shape[0]
+    print(f"🚀 Classifier Running on {device} | Input Dim: {input_dim} | Classes: {num_classes}")
     
-    print(f"🚀 Classifier Running on {device} | Input Dim: {input_dim}")
-    
-    model = Classifier(input_dim, dropout=args.dropout).to(device)
+    model = Classifier(input_dim, num_classes=num_classes, dropout=args.dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
-    # --- BUG FIX: Initialize negative so it is guaranteed to save ---
     best_bal_acc = -1.0
-    best_state = None
-    best_metrics = {}
+    best_state, best_metrics = None, {}
 
     for epoch in range(args.epochs):
         model.train()
@@ -195,34 +260,33 @@ def main():
             opt.step()
             total_loss += loss.item()
         
-        metrics = evaluate(model, val_loader, device)
+        metrics = evaluate(model, val_loader, device, num_classes)
         
-        # Save based on best Balanced Accuracy
         if metrics['bal_acc'] > best_bal_acc:
             best_bal_acc = metrics['bal_acc']
-            best_metrics = metrics  # Store all metrics for this absolute best epoch
+            best_metrics = metrics
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(f"Epoch {epoch+1:03d} | Loss: {total_loss/len(train_loader):.4f} | Val Bal. Acc: {metrics['bal_acc']:.4f}")
 
-    # --- PRINT RICH STATISTICS AT THE END ---
     print(f"\n✅ Stage 3 Complete.")
     print(f"Best Balanced Accuracy: {best_metrics.get('bal_acc', 0):.4f}")
     print(f"Standard Accuracy:      {best_metrics.get('acc', 0):.4f}")
     print(f"Macro F1-Score:         {best_metrics.get('f1_macro', 0):.4f}")
-    print(f"Macro AUC (OvR):        {best_metrics.get('auc_macro', 0):.4f}")
+    print(f"Macro AUC:              {best_metrics.get('auc_macro', 0):.4f}")
 
-    # Checkpoint Saving Logic
     if best_state is not None:
         os.makedirs(os.path.dirname(args.classifier_ckpt), exist_ok=True)
         torch.save({
             "model_state": best_state,
             "input_dim": input_dim,
+            "num_classes": num_classes,          
+            "class_names": current_class_names,  
             "best_bal_acc": best_bal_acc,
-            "metrics": best_metrics # Optional: saves these to the .pt file too
+            "metrics": best_metrics
         }, args.classifier_ckpt)
-        print(f"✅ Saved best classifier weights to {args.classifier_ckpt}")
+        print(f"✅ Saved weights to {args.classifier_ckpt}")
 
 if __name__ == "__main__":
     main()

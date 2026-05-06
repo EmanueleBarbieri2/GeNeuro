@@ -24,26 +24,60 @@ def load_csv_targets(csv_path):
     return targets
 
 class SmartUpdrsDataset(Dataset):
-    def __init__(self, recon_demo_path, targets_dict, use_mask=True):
+    def __init__(self, embeddings_path, targets_dict, active_mods, use_mask=True, zero_impute=False):
         self.samples = []
-        # Load to CPU to keep Blackwell VRAM clear for training
-        data = torch.load(recon_demo_path, map_location="cpu")
-        mod_order = ["SPECT", "MRI", "fMRI", "DTI"]
+        # Load to CPU to keep VRAM clear for training
+        data = torch.load(embeddings_path, map_location="cpu")
         
-        for key, target in targets_dict.items():
-            if key not in data: continue
-            entry = data[key]
-            
-            # Flatten to ensure 1D features per modality
-            feat = torch.cat([entry['recon'][m].flatten() for m in mod_order])
-            
-            if use_mask:
-                mask = torch.tensor([1.0 if m in entry['real'] else 0.0 for m in mod_order])
-                x = torch.cat([feat, mask])
-            else:
-                x = feat
+        # Determine format (embeddings.pt vs recon_demo.pt)
+        is_raw = "embeddings" in data and "labels" in data and "ids" in data
+        
+        if is_raw:
+            # --- ZERO IMPUTATION LOGIC (Ablation: No Generator) ---
+            pt_data = {}
+            for i, (emb, label, pid) in enumerate(zip(data["embeddings"], data["labels"], data["ids"])):
+                if pid not in pt_data: pt_data[pid] = {}
+                pt_data[pid][label] = emb
+
+            for key, target in targets_dict.items():
+                if key not in pt_data: continue
                 
-            self.samples.append((key, x, target))
+                patient_mods = pt_data[key]
+                feat_list = []
+                mask_list = []
+                
+                for m in active_mods:
+                    if m in patient_mods:
+                        feat_list.append(patient_mods[m].flatten())
+                        mask_list.append(0.0) # 0 means NOT missing
+                    else:
+                        # ZERO IMPUTATION
+                        feat_list.append(torch.zeros(1024))
+                        mask_list.append(1.0) # 1 means missing/hallucinated
+                        
+                feat = torch.cat(feat_list)
+                if use_mask:
+                    x = torch.cat([feat, torch.tensor(mask_list)])
+                else:
+                    x = feat
+                self.samples.append((key, x, target))
+                
+        else:
+            # --- HYBRID RECONSTRUCTION LOGIC (Standard Pipeline) ---
+            for key, target in targets_dict.items():
+                if key not in data: continue
+                entry = data[key]
+                
+                feat_list = [entry['recon'][m].flatten() for m in active_mods]
+                feat = torch.cat(feat_list)
+                
+                if use_mask:
+                    mask = torch.tensor([1.0 if m not in entry['real'] else 0.0 for m in active_mods])
+                    x = torch.cat([feat, mask])
+                else:
+                    x = feat
+                    
+                self.samples.append((key, x, target))
 
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx): return self.samples[idx][1], self.samples[idx][2]
@@ -54,7 +88,7 @@ class Regressor(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
-            nn.GELU(), # Blackwell-optimized activation
+            nn.GELU(), 
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim // 4),
             nn.BatchNorm1d(hidden_dim // 4),
@@ -130,7 +164,6 @@ def train_eval(model, train_loader, val_loader, target_idx, device, epochs=50, l
                 if (epoch + 1) % 10 == 0 or epoch == 0:
                     print(f"Epoch {epoch+1:02d} | Loss: {total_loss/len(train_loader):.4f} | R2: {r2:.4f} | MAE: {mae:.4f} {status}")
                     
-    # Pack metrics into a dictionary to return
     best_metrics = {
         "r2": best_r2,
         "mae": best_mae,
@@ -150,13 +183,24 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--dropout', type=float, default=0.5)
-    parser.add_argument('--use_mask', action='store_true', help='Use mask for UPDRS dataset')
+    parser.add_argument('--use_mask', action='store_true', default=True)
     parser.add_argument('--device', default='cuda')
+    
+    # --- ABLATION FLAGS ---
+    parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
+    parser.add_argument('--disable_generator', action='store_true')
     args, _ = parser.parse_known_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-    # 1. Load Split IDs
+# 1. Handle Ablations
+    active_mods = ["SPECT", "MRI", "fMRI", "DTI"]
+    if args.exclude_modality:
+        # Keep only the modalities that are NOT in the excluded list
+        active_mods = [m for m in active_mods if m not in args.exclude_modality]
+        print(f"⚠️ ABLATION: Removed {args.exclude_modality}. Active modalities: {active_mods}")
+
+    # 2. Load Split IDs
     train_ids, val_ids = set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
@@ -168,9 +212,16 @@ def main():
                     if mode == 'train': train_ids.add(line)
                     else: val_ids.add(line)
 
-    # 2. Data Setup
+    # 3. Data Setup
     targets = load_csv_targets(args.csv_path)
-    full_dataset = SmartUpdrsDataset(args.embeddings_path, targets, use_mask=args.use_mask)
+    full_dataset = SmartUpdrsDataset(
+        args.embeddings_path, targets, active_mods, 
+        use_mask=args.use_mask, zero_impute=args.disable_generator
+    )
+    
+    if len(full_dataset) == 0:
+        print("❌ Error: Dataset is empty after filtering.")
+        return
     
     train_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in train_ids]
     val_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in val_ids]

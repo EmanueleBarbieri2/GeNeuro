@@ -5,7 +5,9 @@ import csv
 import argparse
 import sys
 import torch
+import time
 from typing import Dict, List
+from datetime import datetime
 
 sys.path.append(os.getcwd())
 
@@ -19,6 +21,42 @@ from model.downstream.downstream_updrs import Regressor as StaticRegressor
 from model.downstream.downstream_progression import ForecastingGRU
 
 SPECT_NODE_NAMES = ["striatum_bilat", "striatum_L", "striatum_R", "caudate_L", "putamen_L", "caudate_R", "putamen_R"]
+
+
+def _format_seconds(seconds: float) -> str:
+    minutes, secs = divmod(float(seconds), 60.0)
+    hours, minutes = divmod(minutes, 60.0)
+    if hours >= 1:
+        return f"{int(hours)}h {int(minutes)}m {secs:05.2f}s"
+    if minutes >= 1:
+        return f"{int(minutes)}m {secs:05.2f}s"
+    return f"{secs:.2f}s"
+
+
+def _save_timing_report(out_dir: str, stage_times: Dict[str, float], counters: Dict[str, int]) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    total = sum(stage_times.values())
+    payload = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "timings_seconds": stage_times,
+        "counts": counters,
+        "total_seconds": total,
+    }
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    latest_path = os.path.join(out_dir, "batch_explainers_timing_latest.json")
+    run_path = os.path.join(out_dir, f"batch_explainers_timing_{ts}.json")
+
+    for path in [latest_path, run_path]:
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+    print("\n📊 Explainers Timing Summary")
+    for name, seconds in stage_times.items():
+        print(f"  - {name}: {_format_seconds(seconds)}")
+    print(f"  - TOTAL: {_format_seconds(total)}")
+    print(f"\n📝 Saved timing report to: {latest_path}")
+    print(f"📝 Saved run-specific report to: {run_path}")
 
 # ==========================================
 # 1. LOCAL HELPERS
@@ -70,57 +108,20 @@ def build_roi_info(index: int, atlas: List[Dict], lut: Dict, modality: str):
 
 def extract_topk_nodes(node_imp, node_val, node_grad, node_contrib, atlas, lut, mod, topk):
     if node_imp is None or node_imp.numel() == 0: return []
-    
+    k = min(topk, node_imp.numel())
+    indices = torch.topk(node_imp, k).indices.tolist()
+    if isinstance(indices, int): indices = [indices]
     results = []
-    
-    # SCENARIO A: 1D Tensor (e.g., SPECT which only has 1 feature, or previously summed data)
-    if node_imp.dim() == 1 or (node_imp.dim() == 2 and node_imp.shape[1] == 1):
-        node_imp = node_imp.view(-1)
-        k = min(topk, node_imp.numel())
-        indices = torch.topk(node_imp, k).indices.tolist()
-        if isinstance(indices, int): indices = [indices]
-        for idx in indices:
-            info = build_roi_info(idx, atlas, lut, mod)
-            if not info: continue
-            info.update({
-                "importance": float(node_imp[idx].item()),
-                "value_mean": float(node_val[idx].item() if node_val.dim()==1 else node_val[idx,0].item()),
-                "grad_mean": float(node_grad[idx].item() if node_grad.dim()==1 else node_grad[idx,0].item()),
-                "contrib_mean": float(node_contrib[idx].item() if node_contrib.dim()==1 else node_contrib[idx,0].item())
-            })
-            results.append(info)
-            
-    # SCENARIO B: 2D Tensor (e.g., MRI with Area, Thickness, Volume)
-    else:
-        N, F = node_imp.shape
-        flat_imp = node_imp.view(-1)
-        k = min(topk, flat_imp.numel())
-        flat_indices = torch.topk(flat_imp, k).indices.tolist()
-        if isinstance(flat_indices, int): flat_indices = [flat_indices]
-
-        # ---> EXACT FEATURE MAPPING APPLIED HERE <---
-        feature_names = ["Surface_Area", "Thickness", "Volume"]
-
-        for flat_idx in flat_indices:
-            node_idx = flat_idx // F
-            feat_idx = flat_idx % F
-            
-            info = build_roi_info(node_idx, atlas, lut, mod)
-            if not info: continue
-            
-            feat_name = feature_names[feat_idx] if feat_idx < len(feature_names) else f"Feat_{feat_idx}"
-            
-            # Append the specific feature name to the brain region name
-            info["roi_name"] = f"{info['roi_name']}_{feat_name}"
-            
-            info.update({
-                "importance": float(node_imp[node_idx, feat_idx].item()),
-                "value_mean": float(node_val[node_idx, feat_idx].item()),
-                "grad_mean": float(node_grad[node_idx, feat_idx].item()),
-                "contrib_mean": float(node_contrib[node_idx, feat_idx].item())
-            })
-            results.append(info)
-
+    for idx in indices:
+        info = build_roi_info(idx, atlas, lut, mod)
+        if not info: continue
+        info.update({
+            "importance": float(node_imp[idx].item() if node_imp.dim() > 0 else node_imp.item()),
+            "value_mean": float(node_val[idx].item() if node_val.dim() > 0 else node_val.item()),
+            "grad_mean": float(node_grad[idx].item() if node_grad.dim() > 0 else node_grad.item()),
+            "contrib_mean": float(node_contrib[idx].item() if node_contrib.dim() > 0 else node_contrib.item())
+        })
+        results.append(info)
     return results
 
 def extract_topk_edges(edge_imp, edge_val, edge_grad, edge_contrib, edge_index, atlas, lut, mod, topk):
@@ -147,22 +148,31 @@ def extract_topk_edges(edge_imp, edge_val, edge_grad, edge_contrib, edge_index, 
 # 2. MASTER ORCHESTRATOR
 # ==========================================
 def main():
+    t_total = time.perf_counter()
+    stage_times: Dict[str, float] = {}
+    counters = {
+        "subjects_requested": 0,
+        "classification_reports": 0,
+        "updrs_reports": 0,
+        "progression_reports": 0,
+    }
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", default="./data")
-    parser.add_argument("--csv_path", default="./data/PPMI_Curated_Data_Cut_Public_20251112.csv")
-    parser.add_argument("--atlas", default="/home/emanuele/Desktop/Studi/model/model/atlas_centroids.csv")
-    parser.add_argument("--lut", default="/home/emanuele/Desktop/Studi/model/model/FreeSurferColorLUT.txt")
-    parser.add_argument("--out_dir", default="/home/emanuele/Desktop/Studi/model/model/xplainers/explainer_reports")
+    parser.add_argument("--csv_path", default="/home/anon/GeNeuro_HPC/data/PPMI_Curated_Data_Cut_Public_20251112.csv")
+    parser.add_argument("--atlas", default="/home/anon/GeNeuro_HPC/model/atlas_centroids.csv")
+    parser.add_argument("--lut", default="/home/anon/GeNeuro_HPC/model/FreeSurferColorLUT.txt")
+    parser.add_argument("--out_dir", default="/home/anon/GeNeuro_HPC/model/xplainers/explainer_reports")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     
-    parser.add_argument("--encoder_ckpt", default="model/checkpoints_master/encoders.pt")
-    parser.add_argument("--generator_ckpt", default="model/checkpoints_master/generator.pt")
-    parser.add_argument("--classifier_ckpt", default="model/checkpoints_master/classifier.pt")
+    parser.add_argument("--encoder_ckpt", default="model/checkpoints/encoders.pt")
+    parser.add_argument("--generator_ckpt", default="model/checkpoints/generator.pt")
+    parser.add_argument("--classifier_ckpt", default="model/checkpoints/classifier.pt")
     
-    parser.add_argument("--updrs_u2_ckpt", default="model/checkpoints_master/static_U2_ADL.pt")
-    parser.add_argument("--updrs_u3_ckpt", default="model/checkpoints_master/static_U3_Motor.pt")
-    parser.add_argument("--prog_u2_ckpt", default="model/checkpoints_master/prog_U2_ADL.pt")
-    parser.add_argument("--prog_u3_ckpt", default="model/checkpoints_master/prog_U3_Motor.pt")
+    parser.add_argument("--updrs_u2_ckpt", default="model/checkpoints/static_U2_ADL.pt")
+    parser.add_argument("--updrs_u3_ckpt", default="model/checkpoints/static_U3_Motor.pt")
+    parser.add_argument("--prog_u2_ckpt", default="model/checkpoints/prog_U2_ADL.pt")
+    parser.add_argument("--prog_u3_ckpt", default="model/checkpoints/prog_U3_Motor.pt")
     
     parser.add_argument("--delta_t", type=float, default=1.0)
     parser.add_argument("--topk", type=int, default=15)
@@ -170,43 +180,82 @@ def main():
     parser.add_argument("--skip_classification", action="store_true")
     parser.add_argument("--skip_updrs", action="store_true")
     parser.add_argument("--skip_progression", action="store_true")
+    parser.add_argument("--disable_generator", action="store_true", help="Skip loading the generator checkpoint")
+    parser.add_argument("--exclude_modality", nargs='+', default=[], help="Modalities to exclude")
     args = parser.parse_args()
 
+    if args.exclude_modality:
+        print(f"⚠️ ABLATION: Excluding modalities from explainers: {args.exclude_modality}")
+        
+        # Patch the orchestrator's list
+        global MOD_ORDER
+        MOD_ORDER = [m for m in MOD_ORDER if m not in args.exclude_modality]
+        
+        # Patch the helper modules' lists
+        import model.xplainers.explain_classification as expl_cls
+        import model.xplainers.explain_updrs as expl_updrs
+        import model.xplainers.explain_progression as expl_prog
+        
+        expl_cls.MOD_ORDER = [m for m in expl_cls.MOD_ORDER if m not in args.exclude_modality]
+        expl_updrs.MOD_ORDER = [m for m in expl_updrs.MOD_ORDER if m not in args.exclude_modality]
+        expl_prog.MOD_ORDER = [m for m in expl_prog.MOD_ORDER if m not in args.exclude_modality]
+
+    if args.disable_generator:
+        args.generator_ckpt = None
+        print("\n⚠️ ABLATION: Generator disabled. Explainers will use zero-imputation fallback.\n")
+
+    t_inputs = time.perf_counter()
     atlas = load_atlas_centroids(args.atlas)
     lut = load_freesurfer_lut(args.lut)
     subject_ids = sorted(list(load_valid_subject_ids_from_csv(args.csv_path)))
     if args.limit: subject_ids = subject_ids[:args.limit]
+    counters["subjects_requested"] = len(subject_ids)
+    stage_times["Load metadata and subject list"] = time.perf_counter() - t_inputs
 
     print(f"🚀 Initializing Explainability Pipeline on {args.device} for {len(subject_ids)} subjects...")
 
     cls_tools = None
     updrs_encoders, updrs_gen, updrs_heads = None, None, {}
     prog_encoders, prog_gen, prog_heads = None, None, {}
+    stage_times["Load classification engines"] = 0.0
+    stage_times["Load UPDRS engines"] = 0.0
+    stage_times["Load progression engines"] = 0.0
+    t_cls_total = 0.0
+    t_updrs_total = 0.0
+    t_prog_total = 0.0
     
     # UPGRADED CLASSIFICATION LOADER
     if not args.skip_classification:
+        t0 = time.perf_counter()
         print("🧠 Loading Full-Graph Classification Engine...")
         labels = load_class_labels(args.csv_path)
         cls_encoders, cls_gen, clf = build_cls_models(args.device, args.encoder_ckpt, args.generator_ckpt, args.classifier_ckpt)
         cls_tools = (labels, cls_encoders, cls_gen, clf)
+        stage_times["Load classification engines"] = time.perf_counter() - t0
 
     if not args.skip_updrs:
+        t0 = time.perf_counter()
         print("🧠 Loading Static UPDRS Engines (U2 & U3)...")
         updrs_encoders, updrs_gen, _ = build_updrs_models(args.device, args.encoder_ckpt, args.generator_ckpt, args.updrs_u3_ckpt)
         for name, ckpt_path in [("U2_ADL", args.updrs_u2_ckpt), ("U3_Motor", args.updrs_u3_ckpt)]:
             if os.path.exists(ckpt_path):
                 ckpt = torch.load(ckpt_path, map_location=args.device)
                 state = ckpt.get("model_state", ckpt)
-                if "net.0.weight" in state: in_dim = state["net.0.weight"].shape[1]
-                elif "0.weight" in state: in_dim = state["0.weight"].shape[1]
-                else: in_dim = ckpt.get("input_dim", 4096)
+                if "net.0.weight" in state:
+                    in_dim = state["net.0.weight"].shape[1]
+                elif "0.weight" in state:
+                    in_dim = state["0.weight"].shape[1]
+                else:
+                    in_dim = ckpt.get("input_dim", 4096)
                 r = StaticRegressor(in_dim).to(args.device)
                 r.load_state_dict(state)
                 r.input_dim = in_dim
                 r.eval()
                 updrs_heads[name] = r
+        stage_times["Load UPDRS engines"] = time.perf_counter() - t0
 
     if not args.skip_progression:
+        t0 = time.perf_counter()
         print("🧠 Loading Progression GRU Engines (U2 & U3)...")
         prog_encoders, prog_gen, _ = build_prog_models(args.device, args.encoder_ckpt, args.generator_ckpt, args.prog_u3_ckpt)
         for name, ckpt_path in [("U2_ADL", args.prog_u2_ckpt), ("U3_Motor", args.prog_u3_ckpt)]:
@@ -224,72 +273,97 @@ def main():
                 r.input_dim = in_dim
                 r.eval()
                 prog_heads[name] = r
+        stage_times["Load progression engines"] = time.perf_counter() - t0
 
     # --- Processing Loop ---
+    t_loop = time.perf_counter()
     for i, subj in enumerate(subject_ids, 1):
         print(f"[{i}/{len(subject_ids)}] Explaining {subj}...")
         
         # 1. UPGRADED Classification Flow
         if cls_tools:
-            #try:
-                labels, cls_encoders, cls_gen, clf = cls_tools
-                for m in list(cls_encoders.values()) + [cls_gen, clf]: m.zero_grad(set_to_none=True)
-                
-                res = explain_classification_subject_with_models(subj, args.data_root, labels.get(subj), cls_encoders, cls_gen, clf, args.device)
-                if res:
-                    report = {"subject_id": subj, "task": "classification", "true_label": res["true_label"], "pred_label": res["pred_label"], "pred_prob": res["pred_prob"], "modalities": {}}
-                    for mod in MOD_ORDER:
-                        if mod in res.get("node_importance", {}):
-                            report["modalities"][mod] = {
-                                "top_nodes": extract_topk_nodes(res["node_importance"][mod], res["node_value"][mod], res["node_grad"][mod], res["node_contrib"][mod], atlas, lut, mod, args.topk),
-                                "top_edges": extract_topk_edges(res.get("edge_importance",{}).get(mod), res.get("edge_value",{}).get(mod), res.get("edge_grad",{}).get(mod), res.get("edge_contrib",{}).get(mod), res.get("edge_index",{}).get(mod), atlas, lut, mod, args.topk)
-                            }
-                    out_path = os.path.join(args.out_dir, "classification", f"{subj}.json")
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    with open(out_path, 'w') as f: json.dump(report, f, indent=2)
-            #except Exception: pass
+            t0 = time.perf_counter()
+            labels, cls_encoders, cls_gen, clf = cls_tools
+            for m in list(cls_encoders.values()) + [cls_gen, clf]:
+                if m is not None:
+                    m.zero_grad(set_to_none=True)
+
+            res = explain_classification_subject_with_models(subj, args.data_root, labels.get(subj), cls_encoders, cls_gen, clf, args.device)
+            if res:
+                report = {"subject_id": subj, "task": "classification", "true_label": res["true_label"], "pred_label": res["pred_label"], "pred_prob": res["pred_prob"], "modalities": {}}
+                for mod in MOD_ORDER:
+                    if mod in res.get("node_importance", {}):
+                        report["modalities"][mod] = {
+                            "top_nodes": extract_topk_nodes(res["node_importance"][mod], res["node_value"][mod], res["node_grad"][mod], res["node_contrib"][mod], atlas, lut, mod, args.topk),
+                            "top_edges": extract_topk_edges(res.get("edge_importance", {}).get(mod), res.get("edge_value", {}).get(mod), res.get("edge_grad", {}).get(mod), res.get("edge_contrib", {}).get(mod), res.get("edge_index", {}).get(mod), atlas, lut, mod, args.topk)
+                        }
+                out_path = os.path.join(args.out_dir, "classification", f"{subj}.json")
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with open(out_path, 'w') as f:
+                    json.dump(report, f, indent=2)
+                counters["classification_reports"] += 1
+            t_cls_total += time.perf_counter() - t0
 
         # 2. Static UPDRS
         if updrs_heads:
             for target_name, head in updrs_heads.items():
-                #try:
-                    target_idx = UPDRS_TARGETS.index("updrs2_score" if "U2" in target_name else "updrs3_score")
-                    for m in list(updrs_encoders.values()) + [updrs_gen, head]: m.zero_grad(set_to_none=True)
-                    
-                    res = explain_subject_with_models(subj, args.data_root, updrs_encoders, updrs_gen, head, target_idx=target_idx, device=args.device)
-                    
+                t0 = time.perf_counter()
+                target_idx = UPDRS_TARGETS.index("updrs2_score" if "U2" in target_name else "updrs3_score")
+                for m in list(updrs_encoders.values()) + [updrs_gen, head]:
+                    if m is not None:
+                        m.zero_grad(set_to_none=True)
+
+                res = explain_subject_with_models(subj, args.data_root, updrs_encoders, updrs_gen, head, target_idx=target_idx, device=args.device)
+                if res:
                     report = {"subject_id": subj, "task": f"updrs_static_{target_name}", "prediction": res["prediction"], "modalities": {}}
                     for mod in MOD_ORDER:
                         if mod in res.get("node_importance", {}):
                             report["modalities"][mod] = {
                                 "top_nodes": extract_topk_nodes(res["node_importance"][mod], res["node_value"][mod], res["node_grad"][mod], res["node_contrib"][mod], atlas, lut, mod, args.topk),
-                                "top_edges": extract_topk_edges(res.get("edge_importance",{}).get(mod), res.get("edge_value",{}).get(mod), res.get("edge_grad",{}).get(mod), res.get("edge_contrib",{}).get(mod), res.get("edge_index",{}).get(mod), atlas, lut, mod, args.topk)
+                                "top_edges": extract_topk_edges(res.get("edge_importance", {}).get(mod), res.get("edge_value", {}).get(mod), res.get("edge_grad", {}).get(mod), res.get("edge_contrib", {}).get(mod), res.get("edge_index", {}).get(mod), atlas, lut, mod, args.topk)
                             }
                     out_path = os.path.join(args.out_dir, "updrs", f"{subj}_{target_name}.json")
                     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    with open(out_path, 'w') as f: json.dump(report, f, indent=2)
-                #except Exception: pass 
+                    with open(out_path, 'w') as f:
+                        json.dump(report, f, indent=2)
+                    counters["updrs_reports"] += 1
+                else:
+                    print(f"  ⚠️ Skipping {subj} for {target_name}: No active modalities (fMRI/DTI) found.")
+                t_updrs_total += time.perf_counter() - t0
 
         # 3. Progression
         if prog_heads:
             for target_name, head in prog_heads.items():
-                #try:
-                    target_idx = PROG_TARGETS.index("updrs2_score" if "U2" in target_name else "updrs3_score")
-                    for m in list(prog_encoders.values()) + [prog_gen, head]: m.zero_grad(set_to_none=True)
-                    
-                    res = explain_transition_with_models(subj, args.data_root, prog_encoders, prog_gen, head, target_idx=target_idx, delta_t=args.delta_t, device=args.device)
-                    
+                t0 = time.perf_counter()
+                target_idx = PROG_TARGETS.index("updrs2_score" if "U2" in target_name else "updrs3_score")
+                for m in list(prog_encoders.values()) + [prog_gen, head]:
+                    if m is not None:
+                        m.zero_grad(set_to_none=True)
+
+                res = explain_transition_with_models(subj, args.data_root, prog_encoders, prog_gen, head, target_idx=target_idx, delta_t=args.delta_t, device=args.device)
+                if res:
                     report = {"subject_id": subj, "task": f"progression_forecast_{target_name}", "prediction": res["prediction"], "modalities": {}}
                     for mod in MOD_ORDER:
                         if mod in res.get("node_importance", {}):
                             report["modalities"][mod] = {
                                 "top_nodes": extract_topk_nodes(res["node_importance"][mod], res["node_value"][mod], res["node_grad"][mod], res["node_contrib"][mod], atlas, lut, mod, args.topk),
-                                "top_edges": extract_topk_edges(res.get("edge_importance",{}).get(mod), res.get("edge_value",{}).get(mod), res.get("edge_grad",{}).get(mod), res.get("edge_contrib",{}).get(mod), res.get("edge_index",{}).get(mod), atlas, lut, mod, args.topk)
+                                "top_edges": extract_topk_edges(res.get("edge_importance", {}).get(mod), res.get("edge_value", {}).get(mod), res.get("edge_grad", {}).get(mod), res.get("edge_contrib", {}).get(mod), res.get("edge_index", {}).get(mod), atlas, lut, mod, args.topk)
                             }
                     out_path = os.path.join(args.out_dir, "progression", f"{subj}_{target_name}.json")
                     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    with open(out_path, 'w') as f: json.dump(report, f, indent=2)
-                #except Exception: pass 
+                    with open(out_path, 'w') as f:
+                        json.dump(report, f, indent=2)
+                    counters["progression_reports"] += 1
+                else:
+                    print(f"  ⚠️ Skipping {subj} for Progression: No active modalities found.")
+                t_prog_total += time.perf_counter() - t0
+
+    stage_times["Generate explanations (subject loop)"] = time.perf_counter() - t_loop
+    stage_times["Explain classification (all subjects)"] = t_cls_total
+    stage_times["Explain UPDRS (all subjects/targets)"] = t_updrs_total
+    stage_times["Explain progression (all subjects/targets)"] = t_prog_total
+    stage_times["Batch explainers end-to-end"] = time.perf_counter() - t_total
+    _save_timing_report(args.out_dir, stage_times, counters)
 
     print("\n✅ All Explanations Generated and Saved to JSON!")
 

@@ -100,7 +100,7 @@ def build_dti_metadata_index(metadata_dir: Path = None) -> Dict:
     """
 
     if metadata_dir is None:
-        metadata_dir = Path("/home/emanuele/Desktop/Studi/preprocessing/DTI_IDA_Metadata/PPMI")
+        metadata_dir = Path("/home/anon/Desktop/Studi/preprocessing/DTI_IDA_Metadata/PPMI")
 
     index = {"by_subject": {}, "by_key": {}}
 

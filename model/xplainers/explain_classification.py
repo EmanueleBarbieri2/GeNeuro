@@ -9,6 +9,8 @@ try:
 except ImportError:
     from downstream.downstream_classification import Classifier, CLASS_NAMES
 
+# 🌟 RESTORED: batch_explainers.py will dynamically shrink this list for us!
+GLOBAL_MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 
 def load_graph(data_root, modality, subject_id):
@@ -32,13 +34,12 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
         raise RuntimeError("Encoder checkpoint missing!")
         
     ckpt = torch.load(encoder_ckpt, map_location=device)
-    spect_state = ckpt.get("models", {}).get("SPECT", {})
     
-    h_dim = spect_state.get("conv1.bias", torch.zeros(64)).shape[0]
-    if "projection.3.weight" in spect_state:
-        e_dim = spect_state["projection.3.weight"].shape[0]
-    else:
-        e_dim = 1024
+    sample_state = ckpt.get("models", {}).get("fMRI", {})
+    if not sample_state: sample_state = ckpt.get("models", {}).get("DTI", {})
+    
+    h_dim = sample_state.get("node_init.0.bias", torch.zeros(256)).shape[0]
+    e_dim = sample_state.get("projection.3.weight", torch.zeros(1024, 256)).shape[0]
     
     encoders = {
         "SPECT": SPECTEncoder(hidden_dim=h_dim, embed_dim=e_dim).to(device),
@@ -53,10 +54,9 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
 
     if generator_ckpt and os.path.exists(generator_ckpt):
         gen_ckpt = torch.load(generator_ckpt, map_location=device)
-        gen_state = gen_ckpt.get("model_state", {})
-        layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
-        num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = generator = Generator(
+        gen_state = gen_ckpt.get("model_state", gen_ckpt)
+        
+        generator = Generator(
             embed_dim=e_dim,
             hidden_dim=1024,
             num_heads=8,
@@ -66,16 +66,8 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = generator = Generator(
-            embed_dim=e_dim,
-            hidden_dim=1024,
-            num_heads=8,
-            num_layers=5,
-            num_registers=0,
-            mlp_depth=3
-        ).to(device)
+        generator = None
 
-    # Auto-Detect Classifier Input Dimensions
     if not classifier_ckpt or not os.path.exists(classifier_ckpt):
         raise RuntimeError(f"Missing classifier checkpoint: {classifier_ckpt}")
     
@@ -84,23 +76,35 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, classifie
     
     if "net.0.weight" in state: in_dim = state["net.0.weight"].shape[1]
     elif "0.weight" in state: in_dim = state["0.weight"].shape[1]
-    else: in_dim = clf_ckpt.get("input_dim", 4104)
+    else: in_dim = clf_ckpt.get("input_dim", 2050)
     
-    classifier = Classifier(in_dim).to(device)
+    if "net.8.bias" in state: num_classes = state["net.8.bias"].shape[0]
+    else: num_classes = clf_ckpt.get("num_classes", 3)
+    
+    if "class_names" in clf_ckpt:
+        global CLASS_NAMES
+        CLASS_NAMES = clf_ckpt["class_names"]
+        
+    classifier = Classifier(in_dim, num_classes=num_classes).to(device)
     classifier.load_state_dict(state)
     classifier.input_dim = in_dim 
 
     for m in encoders.values(): m.eval()
-    generator.eval(); classifier.eval()
+    if generator is not None: generator.eval()
+    classifier.eval()
+    
     return encoders, generator, classifier
 
 
 def explain_classification_subject_with_models(subject_id, data_root, true_label, encoders, generator, classifier, device="cpu", include_edge_index=True):
     graphs, available = {}, {} 
+    
+    # 🌟 Mask is safely locked to 4 slots. True means "Missing"
     mask = torch.ones(1, 4, dtype=torch.bool, device=device) 
     z_list = [] 
 
-    for i, mod in enumerate(MOD_ORDER):
+    # Only process the modalities that are actually active
+    for mod in MOD_ORDER:
         g = load_graph(data_root, mod, subject_id) 
         if g is None: continue 
         g = g.to(device) 
@@ -108,7 +112,6 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
         if hasattr(g, "edge_attr"): g.edge_attr.requires_grad_(True) 
         graphs[mod] = g 
         
-        # --- THE BATCHNORM FIX ---
         for module in encoders[mod].modules():
             if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
                 module.eval()
@@ -117,33 +120,42 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
                 if getattr(module, 'running_var', None) is None:
                     module.running_var = torch.ones(module.num_features, device=device)
                 module.track_running_stats = True
-        # -------------------------
         
         encoders[mod].eval()
         available[mod] = encoders[mod](g) 
-        mask[0, i] = False 
 
     if not available: return None
     
-    for mod in MOD_ORDER:
-        if mod in available: z_list.append(available[mod].squeeze(0)) 
-        else: z_list.append(torch.zeros(1024, device=device)) 
+    # 🌟 Build a perfect 4-slot tensor for the Generator
+    for i, mod in enumerate(GLOBAL_MOD_ORDER):
+        if mod in available: 
+            z_list.append(available[mod].squeeze(0)) 
+            mask[0, i] = False # Mark as present
+        else: 
+            z_list.append(torch.zeros(1024, device=device)) 
     
     input_tensor = torch.stack(z_list, dim=0).unsqueeze(0) 
-    z_recon, _, _ = generator(input_tensor, mask) 
-    recon = z_recon[0] 
+    
+    if generator is not None:
+        z_recon, _, _ = generator(input_tensor, mask) 
+        recon = z_recon[0]
+    else:
+        recon = [torch.zeros(1024, device=device) for _ in GLOBAL_MOD_ORDER]
 
+    # 🌟 Build the dynamic tensor for the Classifier
     feat, mask_feat = [], [] 
-    for i, mod in enumerate(MOD_ORDER):
+    for mod in MOD_ORDER:
+        idx = GLOBAL_MOD_ORDER.index(mod) # Find its slot in the recon list
         if mod in available:
             feat.append(available[mod].squeeze(0)) 
             mask_feat.append(1.0) 
         else:
-            feat.append(recon[i]) 
+            feat.append(recon[idx]) 
             mask_feat.append(0.0) 
     
     x_base = torch.cat(feat)
-    if hasattr(classifier, 'input_dim') and classifier.input_dim == x_base.shape[0] + 4:
+    
+    if hasattr(classifier, 'input_dim') and classifier.input_dim == x_base.shape[0] + len(mask_feat):
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device)])
     else:
         x = x_base 
@@ -153,7 +165,6 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
     pred_idx = torch.argmax(logits, dim=1).item()
     prob = torch.softmax(logits, dim=1)[0, pred_idx].item()
     
-    # Send the gradient back from the predicted class logit
     logits[0, pred_idx].backward() 
 
     results = {
@@ -167,11 +178,11 @@ def explain_classification_subject_with_models(subject_id, data_root, true_label
     
     for mod, g in graphs.items():
         if hasattr(g, "x") and g.x.grad is not None:
-            # --- CHANGED: Removed .sum(dim=1) from all four lines below ---
-            results["node_importance"][mod] = g.x.grad.abs().cpu() 
-            results["node_value"][mod] = g.x.detach().cpu() 
-            results["node_grad"][mod] = g.x.grad.detach().cpu() 
-            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu() 
+            # 🌟 RESTORED: .sum(dim=1) is required to flatten the feature matrix into 1D node scores
+            results["node_importance"][mod] = g.x.grad.abs().sum(dim=1).cpu() 
+            results["node_value"][mod] = g.x.detach().sum(dim=1).cpu() 
+            results["node_grad"][mod] = g.x.grad.detach().sum(dim=1).cpu() 
+            results["node_contrib"][mod] = (g.x.grad * g.x).detach().sum(dim=1).cpu() 
             
         if hasattr(g, "edge_attr") and g.edge_attr.grad is not None:
             edge_val = g.edge_attr.detach().cpu()

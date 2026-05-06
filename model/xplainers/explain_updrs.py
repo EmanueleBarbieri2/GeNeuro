@@ -32,14 +32,28 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         raise RuntimeError("Encoder checkpoint missing!")
         
     ckpt = torch.load(encoder_ckpt, map_location=device)
-    spect_state = ckpt.get("models", {}).get("SPECT", {})
+    models_dict = ckpt.get("models", {})
     
-    # Auto-detect dimensions
-    h_dim = spect_state.get("conv1.bias", torch.zeros(64)).shape[0]
-    if "projection.3.weight" in spect_state:
-        e_dim = spect_state["projection.3.weight"].shape[0]
-    else:
-        e_dim = 1024
+    # Safely find ANY available modality to infer dimensions
+    sample_state = {}
+    for mod in ["fMRI", "DTI", "SPECT", "MRI"]:
+        if mod in models_dict and len(models_dict[mod]) > 0:
+            sample_state = models_dict[mod]
+            break
+            
+    # Fallbacks
+    h_dim = 256 
+    e_dim = 1024
+    
+    # Infer h_dim based on whatever model we found
+    if "conv1.bias" in sample_state:  # Usually SPECT/MRI
+        h_dim = sample_state["conv1.bias"].shape[0]
+    elif "node_init.0.bias" in sample_state: # Usually fMRI/DTI
+        h_dim = sample_state["node_init.0.bias"].shape[0]
+        
+    # Infer e_dim
+    if "projection.3.weight" in sample_state:
+        e_dim = sample_state["projection.3.weight"].shape[0]
     
     encoders = {
         "SPECT": SPECTEncoder(hidden_dim=h_dim, embed_dim=e_dim).to(device),
@@ -52,30 +66,43 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         if mod in encoders:
             encoders[mod].load_state_dict(state)
 
-    # Auto-detect Generator layers
+    # --- FIX 1: Safely handle disabled generator ---
     if generator_ckpt and os.path.exists(generator_ckpt):
         gen_ckpt = torch.load(generator_ckpt, map_location=device)
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
-        num_layers = max(layer_indices) + 1 if layer_indices else 6
-        generator = generator = Generator(
+        num_layers = max(layer_indices) + 1 if layer_indices else 3
+
+        num_registers = int(gen_state.get("register_tokens", torch.zeros(4, 1, e_dim)).shape[0])
+
+        # infer hidden_dim from dim_feedforward (= hidden_dim * 4)
+        ff_key = "transformer.layers.0.linear1.weight"
+        if ff_key in gen_state:
+            hidden_dim = int(gen_state[ff_key].shape[0] // 4)
+        else:
+            hidden_dim = 512
+
+        # infer mlp_depth from highest projector linear index: 0,3,6,... => depth=(idx/3)+1
+        proj_indices = []
+        for k in gen_state.keys():
+            if k.startswith("modality_projectors.0.") and k.endswith(".weight"):
+                parts = k.split(".")
+                if len(parts) >= 4 and parts[2].isdigit():
+                    proj_indices.append(int(parts[2]))
+        mlp_depth = int(max(proj_indices) // 3 + 1) if proj_indices else 2
+
+        generator = Generator(
             embed_dim=e_dim,
-            hidden_dim=1024,
+            hidden_dim=hidden_dim,
             num_heads=8,
-            num_layers=5,
-            num_registers=0,
-            mlp_depth=3
+            num_layers=num_layers,
+            num_registers=num_registers,
+            mlp_depth=mlp_depth,
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = generator = Generator(
-            embed_dim=e_dim,
-            hidden_dim=1024,
-            num_heads=8,
-            num_layers=5,
-            num_registers=0,
-            mlp_depth=3
-        ).to(device)
+        # Prevent spawning an untrained, random generator
+        generator = None
 
     # Auto-Detect Regressor Input Dimensions
     if not regressor_ckpt or not os.path.exists(regressor_ckpt):
@@ -96,7 +123,8 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
     regressor.input_dim = input_dim
 
     for m in encoders.values(): m.eval()
-    generator.eval(); regressor.eval()
+    if generator is not None: generator.eval()
+    regressor.eval()
     return encoders, generator, regressor
 
 def explain_subject_with_models(subject_id, data_root, encoders, generator, regressor, target_idx=0, device="cpu", include_edge_index=True):
@@ -126,15 +154,20 @@ def explain_subject_with_models(subject_id, data_root, encoders, generator, regr
         available[mod] = encoders[mod](g) 
         mask[0, i] = False 
 
-    if not available: raise RuntimeError("No modalities found.") 
+    if not available: return None
     
     for mod in MOD_ORDER:
         if mod in available: z_list.append(available[mod].squeeze(0)) 
         else: z_list.append(torch.zeros(1024, device=device)) 
     
     input_tensor = torch.stack(z_list, dim=0).unsqueeze(0) 
-    z_recon, _, _ = generator(input_tensor, mask) 
-    recon = z_recon[0] 
+    
+    # --- FIX 2: Implement Zero-Imputation Fallback ---
+    if generator is not None:
+        z_recon, _, _ = generator(input_tensor, mask) 
+        recon = z_recon[0] 
+    else:
+        recon = [torch.zeros(1024, device=device) for _ in MOD_ORDER]
 
     feat, mask_feat = [], [] 
     for i, mod in enumerate(MOD_ORDER):
@@ -147,7 +180,7 @@ def explain_subject_with_models(subject_id, data_root, encoders, generator, regr
     
     # DYNAMIC MASK ATTACHMENT
     x_base = torch.cat(feat)
-    if hasattr(regressor, 'input_dim') and regressor.input_dim == x_base.shape[0] + 4:
+    if hasattr(regressor, 'input_dim') and regressor.input_dim == x_base.shape[0] + len(mask_feat):
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device)])
     else:
         x = x_base 
@@ -167,10 +200,10 @@ def explain_subject_with_models(subject_id, data_root, encoders, generator, regr
     
     for mod, g in graphs.items():
         if hasattr(g, "x") and g.x.grad is not None:
-            results["node_importance"][mod] = g.x.grad.abs().cpu() 
-            results["node_value"][mod] = g.x.detach().cpu()
-            results["node_grad"][mod] = g.x.grad.detach().cpu()
-            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu()
+            results["node_importance"][mod] = g.x.grad.abs().sum(dim=1).cpu() 
+            results["node_value"][mod] = g.x.detach().cpu().sum(dim=1) 
+            results["node_grad"][mod] = g.x.grad.detach().cpu().sum(dim=1) 
+            results["node_contrib"][mod] = (g.x.grad * g.x).detach().cpu().sum(dim=1) 
         if hasattr(g, "edge_attr") and g.edge_attr.grad is not None:
             results["edge_importance"][mod] = g.edge_attr.grad.abs().cpu() 
             results["edge_value"][mod] = g.edge_attr.detach().cpu() 

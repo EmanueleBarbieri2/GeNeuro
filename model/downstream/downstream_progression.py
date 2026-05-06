@@ -8,7 +8,6 @@ import csv
 import argparse
 from collections import defaultdict
 
-MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
 TARGETS = ["updrs1_score", "updrs2_score", "updrs3_score", "updrs4_score"]
 
 # --- Helper Functions ---
@@ -37,26 +36,70 @@ def load_csv_visits(csv_path):
     return visits
 
 class SmartSequenceDataset(Dataset):
-    def __init__(self, recon_demo_path, visits_by_patno, use_mask=True):
+    def __init__(self, embeddings_path, visits_by_patno, active_mods, use_mask=True, zero_impute=False):
         self.samples = []
-        data = torch.load(recon_demo_path, map_location="cpu")
+        data = torch.load(embeddings_path, map_location="cpu")
+        is_raw = "embeddings" in data and "labels" in data and "ids" in data
+        
+        if is_raw:
+            # Group raw embeddings by patient_visit for zero imputation
+            pt_data = {}
+            for emb, label, pid in zip(data["embeddings"], data["labels"], data["ids"]):
+                if pid not in pt_data: pt_data[pid] = {}
+                pt_data[pid][label] = emb
+
         for patno, visits in visits_by_patno.items():
             visits = sorted(visits, key=lambda x: x["year"])
             if len(visits) < 2: continue
+            
             seq_feat, valid_visits = [], []
             for v in visits:
-                if v["key"] in data:
-                    entry = data[v["key"]]
-                    feat = torch.cat([entry['recon'][m].flatten() for m in MOD_ORDER])
+                vid = v["key"]
+                
+                if is_raw:
+                    # --- ZERO IMPUTATION LOGIC ---
+                    if vid not in pt_data: continue
+                    patient_mods = pt_data[vid]
+                    feat_list, mask_list = [], []
+                    
+                    for m in active_mods:
+                        if m in patient_mods:
+                            feat_list.append(patient_mods[m].flatten())
+                            mask_list.append(0.0)
+                        else:
+                            feat_list.append(torch.zeros(1024))
+                            mask_list.append(1.0)
+                            
+                    feat = torch.cat(feat_list)
                     if use_mask:
-                        mask = torch.tensor([1.0 if m in entry['real'] else 0.0 for m in MOD_ORDER])
+                        feat = torch.cat([feat, torch.tensor(mask_list)])
+                    seq_feat.append(feat)
+                    valid_visits.append(v)
+                    
+                else:
+                    # --- HYBRID RECONSTRUCTION LOGIC ---
+                    if vid not in data: continue
+                    entry = data[vid]
+                    feat_list = [entry['recon'][m].flatten() for m in active_mods]
+                    feat = torch.cat(feat_list)
+                    
+                    if use_mask:
+                        mask = torch.tensor([1.0 if m not in entry['real'] else 0.0 for m in active_mods])
                         feat = torch.cat([feat, mask])
                     seq_feat.append(feat)
                     valid_visits.append(v)
+            
             if len(seq_feat) < 2: continue
+            
+            # Create rolling sequences
             for i in range(len(seq_feat) - 1):
-                self.samples.append((seq_feat[:i+1], [v["year"] for v in valid_visits[:i+1]], 
-                                    valid_visits[i+1]["year"] - valid_visits[i]["year"], valid_visits[i+1]["targets"]))
+                self.samples.append((
+                    seq_feat[:i+1], 
+                    [v["year"] for v in valid_visits[:i+1]], 
+                    valid_visits[i+1]["year"] - valid_visits[i]["year"], 
+                    valid_visits[i+1]["targets"]
+                ))
+                
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx): return self.samples[idx]
 
@@ -77,6 +120,7 @@ class ForecastingGRU(nn.Module):
         self.time_encoder = nn.Linear(1, 32)
         self.gru = nn.GRU(hidden_dim + 32, hidden_dim, num_layers=2, batch_first=True, dropout=dropout)
         self.head = nn.Sequential(nn.Linear(hidden_dim + 1, 64), nn.GELU(), nn.Dropout(dropout), nn.Linear(64, 1))
+        
     def forward(self, x, deltas, lengths, dt_pred):
         B, Seq, D = x.shape
         x_comp = self.compressor(x.reshape(-1, D)).view(B, Seq, -1)
@@ -88,13 +132,22 @@ class ForecastingGRU(nn.Module):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--csv_path', required=True); parser.add_argument('--embeddings_path', required=True)
-    parser.add_argument('--progression_ckpt', required=True); parser.add_argument('--target_idx', type=int, default=2)
-    parser.add_argument('--batch_size', type=int, default=512); parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--csv_path', required=True)
+    parser.add_argument('--embeddings_path', required=True)
+    parser.add_argument('--progression_ckpt', required=True)
+    parser.add_argument('--target_idx', type=int, default=2)
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--split_path', required=True)
-    parser.add_argument('--lr', type=float, default=5e-4); parser.add_argument('--hidden_dim', type=int, default=128)
+    parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--hidden_dim', type=int, default=128)
+    parser.add_argument('--use_mask', action='store_true', default=True)
     parser.add_argument('--device', default='cuda')
-    args = parser.parse_args()
+    
+    # --- ABLATION FLAGS ---
+    parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
+    parser.add_argument('--disable_generator', action='store_true')
+    args, _ = parser.parse_known_args()
 
     # Tracker Variables
     best_state = None
@@ -103,8 +156,16 @@ def main():
     best_rmse = float('inf')
     
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    visits = load_csv_visits(args.csv_path)
     
+    # 1. Handle Ablations
+    active_mods = ["SPECT", "MRI", "fMRI", "DTI"]
+    if args.exclude_modality:
+        # Keep only the modalities that are NOT in the excluded list
+        active_mods = [m for m in active_mods if m not in args.exclude_modality]
+        print(f"⚠️ ABLATION: Removed {args.exclude_modality}. Active modalities: {active_mods}")
+
+    # 2. Load Splits & Data
+    visits = load_csv_visits(args.csv_path)
     train_pts, val_pts = set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
@@ -115,12 +176,21 @@ def main():
                 elif line.strip() and not line.startswith('#'):
                     (train_pts if mode == 'train' else val_pts).add(line.split('_')[0])
 
-    t_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in train_pts})
-    v_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in val_pts})
+    t_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in train_pts}, 
+                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+    v_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in val_pts}, 
+                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+    
+    if len(t_ds) == 0:
+        print("❌ Error: Progression Dataset is empty after filtering.")
+        return
+
     t_loader = DataLoader(t_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     v_loader = DataLoader(v_ds, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=2)
 
-    input_dim = t_ds[0][0][0].shape[0] if len(t_ds) > 0 else 4101
+    input_dim = t_ds[0][0][0].shape[0]
+    print(f"🚀 GRU Sequence Forecaster | Input Dim: {input_dim} | Target: {TARGETS[args.target_idx]}")
+    
     model = ForecastingGRU(input_dim=input_dim, hidden_dim=args.hidden_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
@@ -133,8 +203,13 @@ def main():
             target = y[:, args.target_idx].unsqueeze(1) / SCALE
             mask = ~torch.isnan(target)
             if not mask.any(): continue
-            optimizer.zero_grad(); pred = model(x, dlt, lens, dt); loss = F.mse_loss(pred[mask], target[mask])
-            loss.backward(); nn.utils.clip_grad_norm_(model.parameters(), 1.0); optimizer.step(); total_loss += loss.item()
+            optimizer.zero_grad()
+            pred = model(x, dlt, lens, dt)
+            loss = F.mse_loss(pred[mask], target[mask])
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
         scheduler.step()
         
         model.eval(); v_preds, v_trues = [], []
@@ -184,4 +259,5 @@ def main():
         }, args.progression_ckpt)
         print(f"✅ Saved best GRU sequence model to {args.progression_ckpt}")
 
-if __name__ == "__main__": main()
+if __name__ == "__main__": 
+    main()

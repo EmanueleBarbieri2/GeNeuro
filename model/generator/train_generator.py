@@ -153,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_registers', type=int, default=4)
     parser.add_argument('--mlp_depth', type=int, default=2)
     parser.add_argument('--dropout', type=float, default=0.1)
+    parser.add_argument('--exclude_modality', nargs='+', default=None, help='Ignored locally, but prevents argparse crashes from orchestrator')
     args, _ = parser.parse_known_args()
 
     train_ids, val_ids = load_split_ids(args.split_path)

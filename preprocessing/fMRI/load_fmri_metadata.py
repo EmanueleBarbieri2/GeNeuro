@@ -101,7 +101,7 @@ def build_metadata_index(metadata_dir: Path = None) -> Dict:
     """
     
     if metadata_dir is None:
-        metadata_dir = Path('/home/emanuele/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI')
+        metadata_dir = Path('/home/anon/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI')
     
     index = {}
     
@@ -174,10 +174,10 @@ def create_metadata_csv(metadata_dir: Path = None, output_file: Path = None):
     """Create CSV with all metadata parameters for quick lookup"""
     
     if metadata_dir is None:
-        metadata_dir = Path('/home/emanuele/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI')
+        metadata_dir = Path('/home/anon/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI')
     
     if output_file is None:
-        output_file = Path('/home/emanuele/Desktop/Studi/preprocessing/fMRI_Acquisition_Parameters.csv')
+        output_file = Path('/home/anon/Desktop/Studi/preprocessing/fMRI_Acquisition_Parameters.csv')
     
     index = build_metadata_index(metadata_dir)
     

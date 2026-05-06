@@ -1,21 +1,59 @@
 import os
 import json
 import argparse
+import time
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+from datetime import datetime
+
+
+def _format_seconds(seconds):
+    minutes, secs = divmod(float(seconds), 60.0)
+    hours, minutes = divmod(minutes, 60.0)
+    if hours >= 1:
+        return f"{int(hours)}h {int(minutes)}m {secs:05.2f}s"
+    if minutes >= 1:
+        return f"{int(minutes)}m {secs:05.2f}s"
+    return f"{secs:.2f}s"
+
+
+def _save_timing_report(out_dir, stage_times):
+    os.makedirs(out_dir, exist_ok=True)
+    total = sum(stage_times.values())
+    payload = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "timings_seconds": stage_times,
+        "total_seconds": total,
+    }
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    latest_path = os.path.join(out_dir, "aggregate_global_timing_latest.json")
+    run_path = os.path.join(out_dir, f"aggregate_global_timing_{ts}.json")
+
+    for path in [latest_path, run_path]:
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+    print("\n📊 Aggregation Timing Summary")
+    for name, seconds in stage_times.items():
+        print(f"  - {name}: {_format_seconds(seconds)}")
+    print(f"  - TOTAL: {_format_seconds(total)}")
+    print(f"\n📝 Saved timing report to: {latest_path}")
+    print(f"📝 Saved run-specific report to: {run_path}")
 
 def aggregate_task(reports_dir, task_name, out_dir):
+    t0 = time.perf_counter()
     task_dir = os.path.join(reports_dir, task_name)
     if not os.path.exists(task_dir):
         print(f"Directory not found: {task_dir}. Skipping...")
-        return
+        return {"status": "missing_dir", "elapsed_seconds": time.perf_counter() - t0, "reports": 0}
 
     print(f"\n📊 Aggregating Global Biomarkers for: {task_name}")
     files = [f for f in os.listdir(task_dir) if f.endswith('.json')]
     if not files:
         print(f"  No JSON reports found in {task_dir}.")
-        return
+        return {"status": "no_reports", "elapsed_seconds": time.perf_counter() - t0, "reports": 0}
     print(f"  Found {len(files)} patient reports.")
 
     is_classification = (task_name == "classification")
@@ -117,14 +155,23 @@ def aggregate_task(reports_dir, task_name, out_dir):
     if any(len(edges) > 0 for edges in edge_registry.values()):
         process_features(edge_registry, 'top_edges', 'Edge_Name', 'global_edges')
 
+    elapsed = time.perf_counter() - t0
+    print(f"  ⏱️ Completed {task_name} in {_format_seconds(elapsed)}")
+    return {"status": "ok", "elapsed_seconds": elapsed, "reports": len(files)}
+
 def main():
+    t_total = time.perf_counter()
     parser = argparse.ArgumentParser(description="Aggregate JSON reports into global biomarker CSVs.")
     parser.add_argument("--reports_dir", required=True, help="Directory containing task folders.")
     parser.add_argument("--out_dir", required=True, help="Directory to save the CSV files.")
     args = parser.parse_args()
 
+    stage_times = {}
     for task in ["classification", "updrs", "progression"]:
-        aggregate_task(args.reports_dir, task, args.out_dir)
+        task_result = aggregate_task(args.reports_dir, task, args.out_dir)
+        stage_times[f"Aggregate task: {task}"] = task_result["elapsed_seconds"]
+    stage_times["aggregate_global end-to-end"] = time.perf_counter() - t_total
+    _save_timing_report(args.out_dir, stage_times)
     print("\n🚀 All Global Aggregations Complete!")
 
 if __name__ == "__main__":

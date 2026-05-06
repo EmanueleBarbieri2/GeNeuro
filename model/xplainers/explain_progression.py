@@ -6,7 +6,10 @@ from torch_geometric.data import Data, Batch
 
 from model.encoders import SPECTEncoder, MRIEncoder, DTIEncoder, fMRIEncoder
 from model.generator.generator import Generator
-from model.generator.run_generator_demo import hallucinate_missing_modalities
+try:
+    from model.generator.run_generator_demo import hallucinate_missing_modalities
+except ImportError:
+    pass
 from model.downstream.downstream_progression import ForecastingGRU, load_csv_visits, parse_year 
 
 MOD_ORDER = ["SPECT", "MRI", "fMRI", "DTI"]
@@ -34,11 +37,28 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
         raise RuntimeError("Encoder checkpoint missing!")
         
     ckpt = torch.load(encoder_ckpt, map_location=device)
-    spect_state = ckpt.get("models", {}).get("SPECT", {})
+    models_dict = ckpt.get("models", {})
     
-    h_dim = spect_state.get("conv1.bias", torch.zeros(64)).shape[0]
-    if "projection.3.weight" in spect_state: e_dim = spect_state["projection.3.weight"].shape[0]
-    else: e_dim = 1024
+    # Safely find ANY available modality to infer dimensions
+    sample_state = {}
+    for mod in ["fMRI", "DTI", "SPECT", "MRI"]:
+        if mod in models_dict and len(models_dict[mod]) > 0:
+            sample_state = models_dict[mod]
+            break
+            
+    # Fallbacks
+    h_dim = 256 
+    e_dim = 1024
+    
+    # Infer h_dim based on whatever model we found
+    if "conv1.bias" in sample_state:  # Usually SPECT/MRI
+        h_dim = sample_state["conv1.bias"].shape[0]
+    elif "node_init.0.bias" in sample_state: # Usually fMRI/DTI
+        h_dim = sample_state["node_init.0.bias"].shape[0]
+        
+    # Infer e_dim
+    if "projection.3.weight" in sample_state:
+        e_dim = sample_state["projection.3.weight"].shape[0]
     
     encoders = {
         "SPECT": SPECTEncoder(hidden_dim=h_dim, embed_dim=e_dim).to(device),
@@ -50,29 +70,41 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
     for mod, state in ckpt.get("models", {}).items():
         if mod in encoders: encoders[mod].load_state_dict(state)
 
+    # --- FIX 1: Safely handle disabled generator ---
     if generator_ckpt and os.path.exists(generator_ckpt):
         gen_ckpt = torch.load(generator_ckpt, map_location=device)
         gen_state = gen_ckpt.get("model_state", {})
         layer_indices = [int(k.split(".")[2]) for k in gen_state.keys() if k.startswith("transformer.layers.")]
-        num_layers = max(layer_indices) + 1 if layer_indices else 6
+        num_layers = max(layer_indices) + 1 if layer_indices else 3
+
+        num_registers = int(gen_state.get("register_tokens", torch.zeros(4, 1, e_dim)).shape[0])
+
+        ff_key = "transformer.layers.0.linear1.weight"
+        if ff_key in gen_state:
+            hidden_dim = int(gen_state[ff_key].shape[0] // 4)
+        else:
+            hidden_dim = 512
+
+        proj_indices = []
+        for k in gen_state.keys():
+            if k.startswith("modality_projectors.0.") and k.endswith(".weight"):
+                parts = k.split(".")
+                if len(parts) >= 4 and parts[2].isdigit():
+                    proj_indices.append(int(parts[2]))
+        mlp_depth = int(max(proj_indices) // 3 + 1) if proj_indices else 2
+
         generator = Generator(
             embed_dim=e_dim,
-            hidden_dim=1024,
+            hidden_dim=hidden_dim,
             num_heads=8,
-            num_layers=5,
-            num_registers=0,
-            mlp_depth=3
+            num_layers=num_layers,
+            num_registers=num_registers,
+            mlp_depth=mlp_depth,
         ).to(device)
         generator.load_state_dict(gen_state)
     else:
-        generator = Generator(
-            embed_dim=e_dim,
-            hidden_dim=1024,
-            num_heads=8,
-            num_layers=5,
-            num_registers=0,
-            mlp_depth=3
-        ).to(device)
+        # Prevent spawning an untrained, random generator
+        generator = None
 
     # Load GRU Regressor Dynamically
     if not regressor_ckpt or not os.path.exists(regressor_ckpt):
@@ -93,23 +125,33 @@ def build_models(device="cpu", encoder_ckpt=None, generator_ckpt=None, regressor
     regressor.input_dim = input_dim
     
     for m in encoders.values(): m.eval()
-    generator.eval(); regressor.eval()
+    if generator is not None: generator.eval()
+    regressor.eval()
     return encoders, generator, regressor
 
 def build_visit_feature(generator, available, delta_prev, expected_dim, device="cpu"):
     # 1. Prepare inputs for the generator, preserving gradients!
     z_list = []
     mask = torch.ones(1, 4, dtype=torch.bool, device=device)
+    
+    # Safely get embed_dim if generator is missing
+    embed_dim = generator.embed_dim if (generator is not None and hasattr(generator, 'embed_dim')) else 1024
+
     for i, mod in enumerate(MOD_ORDER):
         if mod in available:
             z_list.append(available[mod])
             mask[0, i] = False
         else:
-            z_list.append(torch.zeros(generator.embed_dim if hasattr(generator, 'embed_dim') else 1024, device=device))
+            z_list.append(torch.zeros(embed_dim, device=device))
             
     input_tensor = torch.stack(z_list, dim=0).unsqueeze(0)
-    z_recon, _, _ = generator(input_tensor, mask)
-    recon = z_recon[0]
+    
+    # --- FIX 2: Implement Zero-Imputation Fallback ---
+    if generator is not None:
+        z_recon, _, _ = generator(input_tensor, mask)
+        recon = z_recon[0]
+    else:
+        recon = [torch.zeros(embed_dim, device=device) for _ in MOD_ORDER]
     
     # 2. Build the feature vector
     feat, mask_feat = [], []
@@ -124,20 +166,24 @@ def build_visit_feature(generator, available, delta_prev, expected_dim, device="
     x_base = torch.cat(feat, dim=0)
     
     # 3. Dynamic Mask and Time Attachment
-    if expected_dim == x_base.shape[0] + 5:
+    if expected_dim == x_base.shape[0] + len(mask_feat) + 1:
+        # Model expects: base features + masks + 1 time gap
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device), torch.tensor([delta_prev], dtype=torch.float32, device=device)], dim=0)
-    elif expected_dim == x_base.shape[0] + 4:
+    elif expected_dim == x_base.shape[0] + len(mask_feat):
+        # Model expects: base features + masks
         x = torch.cat([x_base, torch.tensor(mask_feat, dtype=torch.float32, device=device)], dim=0)
     elif expected_dim == x_base.shape[0] + 1:
+        # Model expects: 4096 features + 1 time gap
         x = torch.cat([x_base, torch.tensor([delta_prev], dtype=torch.float32, device=device)], dim=0)
     else:
+        # Model expects: strictly 4096 features
         x = x_base
         
     return x
 
 def explain_transition_with_models(subject_id, data_root, encoders, generator, regressor, target_idx=0,
                                    delta_t=1.0, device="cpu", include_edge_index=True,
-                                   csv_path="/home/emanuele/Desktop/Studi/model/data/PPMI_Curated_Data_Cut_Public_20251112.csv"):
+                                   csv_path="/home/anon/GeNeuro_HPC/data/PPMI_Curated_Data_Cut_Public_20251112.csv"):
     patno = subject_id.split("_")[0]
     visits_by_patno = load_csv_visits(csv_path)
     if patno not in visits_by_patno:
@@ -169,6 +215,7 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                 g.edge_attr.requires_grad_(True)
             graphs_by_mod[mod].append(g)
             
+            # --- THE BATCHNORM FIX ---
             for module in encoders[mod].modules():
                 if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
                     module.eval()
@@ -177,6 +224,7 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                     if getattr(module, 'running_var', None) is None:
                         module.running_var = torch.ones(module.num_features, device=device)
                     module.track_running_stats = True
+            # -------------------------
             
             z = encoders[mod](g)
             available[mod] = z.squeeze(0)
@@ -186,20 +234,22 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
             continue
 
         delta_prev = 0.0 if prev_year is None else (v["year"] - prev_year)
-        dt_list.append(delta_prev)  
+        dt_list.append(delta_prev) 
         
         feat = build_visit_feature(generator, available, delta_prev, regressor.input_dim, device=device)
         history_feats.append(feat)
         prev_year = v["year"]
 
     if len(history_feats) == 0:
-        raise RuntimeError("No usable history visits with modalities for this subject_id.")
+        return None
 
     seq = torch.stack(history_feats, dim=0).unsqueeze(0)
     lengths = torch.tensor([seq.size(1)], dtype=torch.long, device=device)
     
     dt_seq = torch.tensor([dt_list], dtype=torch.float32, device=device)
     delta_t_next = torch.tensor([[delta_t]], dtype=torch.float32, device=device)
+
+    regressor.train()
 
     pred = regressor(seq, dt_seq, lengths, delta_t_next) 
     
@@ -224,10 +274,9 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
 
         for g in graphs:
             if hasattr(g, "x") and torch.is_tensor(g.x) and g.x.grad is not None:
-                # ---> CHANGED: Removed .sum(dim=1) to keep the 2D [Nodes, Features] shape <---
-                node_vals.append(g.x.detach().cpu())
-                node_grads.append(g.x.grad.detach().cpu())
-                node_contribs.append((g.x.grad * g.x).detach().cpu())
+                node_vals.append(g.x.detach().cpu().sum(dim=1))
+                node_grads.append(g.x.grad.detach().cpu().sum(dim=1))
+                node_contribs.append((g.x.grad * g.x).detach().cpu().sum(dim=1))
             if hasattr(g, "edge_attr") and torch.is_tensor(g.edge_attr) and g.edge_attr.grad is not None:
                 edge_val = g.edge_attr.detach().cpu()
                 edge_grad = g.edge_attr.grad.detach().cpu()
@@ -240,7 +289,6 @@ def explain_transition_with_models(subject_id, data_root, encoders, generator, r
                 edge_indices.append(g.edge_index.detach().cpu())
 
         if node_vals:
-            # Longitudinal averaging over time
             results["node_value"][mod] = torch.stack(node_vals, dim=0).mean(dim=0)
             results["node_grad"][mod] = torch.stack(node_grads, dim=0).mean(dim=0)
             results["node_contrib"][mod] = torch.stack(node_contribs, dim=0).mean(dim=0)

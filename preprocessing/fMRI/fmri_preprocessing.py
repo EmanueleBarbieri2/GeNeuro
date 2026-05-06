@@ -812,7 +812,7 @@ def main():
     parser.add_argument('--output-root', default=str(Config.OUTPUT_ROOT), help='Output root')
     parser.add_argument('--atlas-path', default=None, help='Path to APARC+ASEG atlas')
     parser.add_argument('--parallel', type=int, default=None, help='Number of workers')
-    parser.add_argument('--metadata-dir', default='/home/emanuele/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI',
+    parser.add_argument('--metadata-dir', default='/home/anon/Desktop/Studi/preprocessing/fMRI_IDA_Metadata/PPMI',
                        help='Metadata directory')
     
     args = parser.parse_args()
@@ -824,7 +824,7 @@ def main():
     if args.atlas_path:
         Config.APARC_ASEG_PATH = args.atlas_path
     
-    nifti_root = Path('/home/emanuele/Downloads/fMRI_NIfTI')
+    nifti_root = Path('/home/anon/Downloads/fMRI_NIfTI')
     
     print("Loading FreeSurfer data...")
     fs_data = load_freesurfer_data(Config.DATA_ROOT)

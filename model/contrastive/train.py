@@ -13,7 +13,7 @@ class NeuroTrainer:
     def __init__(self, data_root, device='cpu', batch_size=32, lr=1e-4, 
                  alpha=-2.0, beta=2.0, use_aug=True, hub_name='fMRI',
                  aug_mask=0.15, aug_jitter=0.01, clip_val=1.0,
-                 hidden_dim=128, embed_dim=1024, threshold=0.80):
+                 hidden_dim=128, embed_dim=1024, threshold=0.80, exclude_modality=None):
         
         self.data_root = data_root
         self.device = device
@@ -28,6 +28,12 @@ class NeuroTrainer:
             'fMRI': fMRIEncoder(hidden_dim=hidden_dim, embed_dim=embed_dim, threshold=threshold).to(device),
             'DTI': DTIEncoder(hidden_dim=hidden_dim, embed_dim=embed_dim, threshold=threshold).to(device)
         })
+
+        if exclude_modality:
+            for mod in exclude_modality:
+                if mod in self.models:
+                    del self.models[mod]
+                    print(f"⚠️ ABLATION: Modality {mod} excluded from contrastive training.")
         
         # 2. Setup Augmentor
         if use_aug:
@@ -63,7 +69,14 @@ class NeuroTrainer:
                 loaders.append((spoke, DataLoader(ds, batch_size=self.batch_size, 
                                                  shuffle=True, collate_fn=multimodal_collate)))
 
-        print(f"🚀 Stage 1 | Hub: {self.hub_name} | Batch: {self.batch_size} | Threshold={self.models['fMRI'].threshold}")
+        # Safely display hub threshold if available on the selected hub model
+        try:
+            hub_thr = getattr(self.models[self.hub_name], 'threshold')
+            thr_display = f"{hub_thr}"
+        except Exception:
+            thr_display = "n/a"
+
+        print(f"🚀 Stage 1 | Hub: {self.hub_name} | Batch: {self.batch_size} | Threshold={thr_display}")
         
         for epoch in range(epochs):
             self.models.train()
@@ -130,6 +143,8 @@ if __name__ == "__main__":
     parser.add_argument('--hidden_dim', type=int, default=128)
     parser.add_argument('--embed_dim', type=int, default=1024)
     parser.add_argument('--threshold', type=float, default=0.80)
+
+    parser.add_argument('--exclude_modality', nargs='+', default=None)
     
     parser.add_argument('--no_aug', action='store_true')
     parser.add_argument('--device', default='cpu')
@@ -152,7 +167,8 @@ if __name__ == "__main__":
         alpha=args.alpha, beta=args.beta,
         use_aug=not args.no_aug, hub_name=args.hub_name,
         aug_mask=args.aug_mask, aug_jitter=args.aug_jitter, clip_val=args.clip_val,
-        hidden_dim=args.hidden_dim, embed_dim=args.embed_dim, threshold=args.threshold
+        hidden_dim=args.hidden_dim, embed_dim=args.embed_dim, threshold=args.threshold,
+        exclude_modality=args.exclude_modality  
     )
     
     trainer.run_training(epochs=args.epochs, train_ids=train_ids)

@@ -45,6 +45,7 @@ def main():
     parser.add_argument('--num_layers', type=int, default=3)
     parser.add_argument('--num_registers', type=int, default=4)
     parser.add_argument('--mlp_depth', type=int, default=2)
+    parser.add_argument('--exclude_modality', nargs='+', default=None, help='Ignored locally, but prevents argparse crashes from orchestrator')
     
     args, unknown = parser.parse_known_args()
 
