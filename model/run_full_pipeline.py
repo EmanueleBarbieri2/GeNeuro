@@ -163,7 +163,7 @@ if args.require_all_active or args.strict_downstream:
         
     with open(strict_split_path, 'w') as f:
         for line in lines:
-            if 'train_ids' in line or 'val_ids' in line or not line.strip() or line.startswith('#'):
+            if any(header in line for header in ('train_ids:', 'val_ids:', 'test_ids:')) or not line.strip() or line.startswith('#'):
                 f.write(line + '\n')
             else:
                 subj = line.strip()

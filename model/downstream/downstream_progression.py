@@ -166,20 +166,26 @@ def main():
 
     # 2. Load Splits & Data
     visits = load_csv_visits(args.csv_path)
-    train_pts, val_pts = set(), set()
+    train_pts, val_pts, test_pts = set(), set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
             mode = None
             for line in f.read().splitlines():
                 if 'train_ids' in line: mode = 'train'
                 elif 'val_ids' in line: mode = 'val'
+                elif 'test_ids' in line: mode = 'test'
                 elif line.strip() and not line.startswith('#'):
-                    (train_pts if mode == 'train' else val_pts).add(line.split('_')[0])
+                    patient = line.split('_')[0]
+                    if mode == 'train': train_pts.add(patient)
+                    elif mode == 'val': val_pts.add(patient)
+                    elif mode == 'test': test_pts.add(patient)
 
     t_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in train_pts}, 
                                 active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
     v_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in val_pts}, 
                                 active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+    test_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in test_pts},
+                                   active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
     
     if len(t_ds) == 0:
         print("❌ Error: Progression Dataset is empty after filtering.")
@@ -187,6 +193,7 @@ def main():
 
     t_loader = DataLoader(t_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=4)
     v_loader = DataLoader(v_ds, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=2)
 
     input_dim = t_ds[0][0][0].shape[0]
     print(f"🚀 GRU Sequence Forecaster | Input Dim: {input_dim} | Target: {TARGETS[args.target_idx]}")
@@ -243,11 +250,33 @@ def main():
                 if (epoch + 1) % 10 == 0 or epoch == 0:
                     print(f"Epoch {epoch+1:03d} | Loss: {total_loss/len(t_loader):.4f} | Val R2: {r2:.4f} | MAE: {mae:.4f}")
 
+    validation_metrics = {"r2": best_r2, "mae": best_mae, "rmse": best_rmse}
+    reported_metrics = validation_metrics
+    if len(test_ds) and best_state is not None:
+        model.load_state_dict(best_state)
+        model.eval()
+        preds, trues = [], []
+        with torch.no_grad():
+            for x, dlt, lens, dt, y in test_loader:
+                preds.append(model(x.to(device), dlt.to(device), lens, dt.to(device)).cpu() * SCALE)
+                trues.append(y[:, args.target_idx].unsqueeze(1))
+        preds, trues = torch.cat(preds), torch.cat(trues)
+        mask = ~torch.isnan(trues)
+        if not mask.any():
+            raise RuntimeError("The test partition has no usable targets for this progression task.")
+        mse = F.mse_loss(preds[mask], trues[mask])
+        reported_metrics = {
+            "r2": (1 - mse / (torch.var(trues[mask]) + 1e-8)).item(),
+            "mae": torch.mean(torch.abs(preds[mask] - trues[mask])).item(),
+            "rmse": torch.sqrt(mse).item(),
+        }
+
     target_name = TARGETS[args.target_idx].upper()
-    print(f"\n✅ Progression Training Complete [{target_name}].")
-    print(f"Best R2:   {best_r2:.4f}")
-    print(f"Best MAE:  {best_mae:.4f}")
-    print(f"Best RMSE: {best_rmse:.4f}")
+    label = "Untouched Test-Set" if len(test_ds) else "Best Validation"
+    print(f"\n🧪 {label} Metrics [{target_name}].")
+    print(f"R2:   {reported_metrics['r2']:.4f}")
+    print(f"MAE:  {reported_metrics['mae']:.4f}")
+    print(f"RMSE: {reported_metrics['rmse']:.4f}")
     
     if best_state is not None:
         os.makedirs(os.path.dirname(args.progression_ckpt), exist_ok=True)
@@ -255,7 +284,9 @@ def main():
             "model_state": best_state, 
             "input_dim": input_dim, 
             "target_idx": args.target_idx,
-            "metrics": {"r2": best_r2, "mae": best_mae, "rmse": best_rmse}
+            "validation_metrics": validation_metrics,
+            "metrics": reported_metrics,
+            "evaluation_split": "test" if len(test_ds) else "validation",
         }, args.progression_ckpt)
         print(f"✅ Saved best GRU sequence model to {args.progression_ckpt}")
 

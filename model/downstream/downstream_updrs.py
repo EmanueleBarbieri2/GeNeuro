@@ -172,6 +172,28 @@ def train_eval(model, train_loader, val_loader, target_idx, device, epochs=50, l
     
     return best_state, best_metrics
 
+def evaluate_regressor(model, loader, target_idx, device):
+    model.eval()
+    preds, trues = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            preds.append(model(x.to(device)) * 100.0)
+            trues.append(y[:, target_idx].unsqueeze(1))
+    if not preds:
+        return None
+    preds, trues = torch.cat(preds).cpu(), torch.cat(trues).cpu()
+    mask = ~torch.isnan(trues)
+    if not mask.any():
+        return None
+    preds, trues = preds[mask], trues[mask]
+    mse = F.mse_loss(preds, trues).item()
+    variance = torch.var(trues).item() + 1e-8
+    return {
+        "r2": 1 - (mse / variance),
+        "mae": torch.mean(torch.abs(preds - trues)).item(),
+        "rmse": torch.sqrt(torch.tensor(mse)).item(),
+    }
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv_path', required=True)
@@ -201,16 +223,18 @@ def main():
         print(f"⚠️ ABLATION: Removed {args.exclude_modality}. Active modalities: {active_mods}")
 
     # 2. Load Split IDs
-    train_ids, val_ids = set(), set()
+    train_ids, val_ids, test_ids = set(), set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
             mode = None
             for line in f.read().splitlines():
                 if 'train_ids' in line: mode = 'train'
                 elif 'val_ids' in line: mode = 'val'
+                elif 'test_ids' in line: mode = 'test'
                 elif line.strip() and not line.startswith('#'):
                     if mode == 'train': train_ids.add(line)
-                    else: val_ids.add(line)
+                    elif mode == 'val': val_ids.add(line)
+                    elif mode == 'test': test_ids.add(line)
 
     # 3. Data Setup
     targets = load_csv_targets(args.csv_path)
@@ -225,12 +249,15 @@ def main():
     
     train_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in train_ids]
     val_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in val_ids]
+    test_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in test_ids]
     
     train_loader = DataLoader(torch.utils.data.Subset(full_dataset, train_idx), 
                               batch_size=args.batch_size, shuffle=True, 
                               num_workers=4, pin_memory=True)
     val_loader = DataLoader(torch.utils.data.Subset(full_dataset, val_idx), 
                             batch_size=args.batch_size, num_workers=2)
+    test_loader = DataLoader(torch.utils.data.Subset(full_dataset, test_idx),
+                             batch_size=args.batch_size, num_workers=2)
 
     input_dim = full_dataset[0][0].shape[0] if len(full_dataset) > 0 else 4100
     print(f"🚀 UPDRS Regressor | Dim: {input_dim} | Target: {TARGETS[args.target_idx]}")
@@ -244,17 +271,27 @@ def main():
     target_name = TARGETS[args.target_idx].upper()
     
     # --- PRINT RICH STATISTICS AT THE END ---
-    print(f"\n✅ Static Regression Complete [{target_name}].")
-    print(f"Best R2:   {best_metrics['r2']:.4f}")
-    print(f"Best MAE:  {best_metrics['mae']:.4f}")
-    print(f"Best RMSE: {best_metrics['rmse']:.4f}")
+    reported_metrics = best_metrics
+    if test_idx and best_state is not None:
+        model.load_state_dict(best_state)
+        reported_metrics = evaluate_regressor(model, test_loader, args.target_idx, device)
+        if reported_metrics is None:
+            raise RuntimeError("The test partition has no usable targets for this UPDRS task.")
+        print(f"\n🧪 Untouched Test-Set Metrics [{target_name}].")
+    else:
+        print(f"\n✅ Static Regression Complete [{target_name}] (validation metrics; no test_ids supplied).")
+    print(f"R2:   {reported_metrics['r2']:.4f}")
+    print(f"MAE:  {reported_metrics['mae']:.4f}")
+    print(f"RMSE: {reported_metrics['rmse']:.4f}")
     
     if best_state is not None:
         os.makedirs(os.path.dirname(args.updrs_ckpt), exist_ok=True)
         torch.save({
             "model_state": best_state, 
             "target_idx": args.target_idx,
-            "metrics": best_metrics
+            "validation_metrics": best_metrics,
+            "metrics": reported_metrics,
+            "evaluation_split": "test" if test_idx else "validation",
         }, args.updrs_ckpt)
         print(f"✅ Saved best regressor to {args.updrs_ckpt}")
     

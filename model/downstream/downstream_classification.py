@@ -197,16 +197,18 @@ def main():
         current_class_names = ["Control", "PD", "Prodromal"]
     num_classes = len(current_class_names)
 
-    train_ids, val_ids = set(), set()
+    train_ids, val_ids, test_ids = set(), set(), set()
     if os.path.exists(args.split_path):
         with open(args.split_path) as f:
             mode = None
             for line in f.read().splitlines():
                 if 'train_ids' in line: mode = 'train'
                 elif 'val_ids' in line: mode = 'val'
+                elif 'test_ids' in line: mode = 'test'
                 elif line.strip() and not line.startswith('#'):
                     if mode == 'train': train_ids.add(line)
-                    else: val_ids.add(line)
+                    elif mode == 'val': val_ids.add(line)
+                    elif mode == 'test': test_ids.add(line)
     
     labels = load_csv_labels(args.csv_path, drop_prodromal=args.drop_prodromal)
     
@@ -223,18 +225,24 @@ def main():
 
     train_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in train_ids]
     val_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in val_ids]
+    test_idx = [i for i, s in enumerate(full_dataset.samples) if s[0] in test_ids]
 
     # 🌟 PRESERVED DIAGNOSTIC BLOCK 🌟
     train_labels = [current_class_names[full_dataset.samples[i][1]] for i in train_idx]
     val_labels = [current_class_names[full_dataset.samples[i][1]] for i in val_idx]
+    test_labels = [current_class_names[full_dataset.samples[i][1]] for i in test_idx]
     
     print("\n📊 DATASET DIAGNOSTICS:")
     print(f"   Train Set: {len(train_idx)} visits -> {dict(Counter(train_labels))}")
-    print(f"   Val Set:   {len(val_idx)} visits -> {dict(Counter(val_labels))}\n")
+    print(f"   Val Set:   {len(val_idx)} visits -> {dict(Counter(val_labels))}")
+    if test_ids:
+        print(f"   Test Set:  {len(test_idx)} visits -> {dict(Counter(test_labels))}")
+    print()
     # 🌟 ------------------------ 🌟
     
     train_loader = DataLoader(torch.utils.data.Subset(full_dataset, train_idx), batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(torch.utils.data.Subset(full_dataset, val_idx), batch_size=args.batch_size)
+    test_loader = DataLoader(torch.utils.data.Subset(full_dataset, test_idx), batch_size=args.batch_size)
 
     counts = Counter([full_dataset.samples[i][1] for i in train_idx])
     weights = torch.tensor([len(train_idx) / (num_classes * counts.get(i, 1)) for i in range(num_classes)]).to(device)
@@ -270,11 +278,17 @@ def main():
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(f"Epoch {epoch+1:03d} | Loss: {total_loss/len(train_loader):.4f} | Val Bal. Acc: {metrics['bal_acc']:.4f}")
 
-    print(f"\n✅ Stage 3 Complete.")
-    print(f"Best Balanced Accuracy: {best_metrics.get('bal_acc', 0):.4f}")
-    print(f"Standard Accuracy:      {best_metrics.get('acc', 0):.4f}")
-    print(f"Macro F1-Score:         {best_metrics.get('f1_macro', 0):.4f}")
-    print(f"Macro AUC:              {best_metrics.get('auc_macro', 0):.4f}")
+    reported_metrics = best_metrics
+    if test_idx and best_state is not None:
+        model.load_state_dict(best_state)
+        reported_metrics = evaluate(model, test_loader, device, num_classes)
+        print("\n🧪 Untouched Test-Set Metrics:")
+    else:
+        print("\n✅ Stage 3 Complete (validation metrics; no test_ids partition supplied).")
+    print(f"Balanced Accuracy: {reported_metrics.get('bal_acc', 0):.4f}")
+    print(f"Standard Accuracy: {reported_metrics.get('acc', 0):.4f}")
+    print(f"Macro F1-Score:    {reported_metrics.get('f1_macro', 0):.4f}")
+    print(f"Macro AUC:         {reported_metrics.get('auc_macro', 0):.4f}")
 
     if best_state is not None:
         os.makedirs(os.path.dirname(args.classifier_ckpt), exist_ok=True)
@@ -284,7 +298,9 @@ def main():
             "num_classes": num_classes,          
             "class_names": current_class_names,  
             "best_bal_acc": best_bal_acc,
-            "metrics": best_metrics
+            "validation_metrics": best_metrics,
+            "metrics": reported_metrics,
+            "evaluation_split": "test" if test_idx else "validation",
         }, args.classifier_ckpt)
         print(f"✅ Saved weights to {args.classifier_ckpt}")
 

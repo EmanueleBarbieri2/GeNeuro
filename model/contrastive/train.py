@@ -158,7 +158,10 @@ if __name__ == "__main__":
             mode = None
             for line in f:
                 line = line.strip()
-                if line == "train_ids:": mode = "train"
+                if line == "train_ids:":
+                    mode = "train"
+                elif line in {"val_ids:", "test_ids:"}:
+                    mode = None
                 elif line and mode == "train" and not line.startswith("#"):
                     train_ids.append(line)
 

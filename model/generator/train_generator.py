@@ -73,6 +73,7 @@ def load_split_ids(split_path):
                 line = line.strip()
                 if line == 'train_ids:': mode = 'train'; continue
                 if line == 'val_ids:': mode = 'val'; continue
+                if line == 'test_ids:': mode = 'test'; continue
                 if line and mode == 'train': train_ids.add(line)
                 elif line and mode == 'val': val_ids.add(line)
     return train_ids, val_ids
