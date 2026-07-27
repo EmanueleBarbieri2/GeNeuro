@@ -16,11 +16,23 @@ def parse_args():
     parser.add_argument('--split_path', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'unified_split_master.txt')))
     parser.add_argument('--checkpoints_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), 'checkpoints')))
     parser.add_argument('--device', default='cuda')
+    parser.add_argument(
+        '--reuse_representations_dir',
+        help=(
+            'Skip Stage 1/2 and reuse recon_demo.pt (or embeddings.pt with '
+            '--disable_generator) from this directory for a matched downstream rerun.'
+        ),
+    )
     
     # --- Ablation Flags ---
     parser.add_argument('--exclude_modality', nargs='+', default=[], choices=['SPECT', 'MRI', 'fMRI', 'DTI'])
     parser.add_argument('--skip_cl', action='store_true')
     parser.add_argument('--disable_generator', action='store_true')
+    parser.add_argument(
+        '--no_missingness_mask',
+        action='store_true',
+        help='Train all downstream heads without the observed/reconstructed modality indicators.',
+    )
     parser.add_argument('--drop_prodromal', action='store_true')
     
     # 🌟 NEW: Autonomous Ablation Routing Flags
@@ -189,6 +201,8 @@ def build_cmd(base_cmd):
         base_cmd.extend(args.exclude_modality)
     if args.disable_generator:
         base_cmd.append('--disable_generator')
+    if args.no_missingness_mask:
+        base_cmd.append('--no_missingness_mask')
     return base_cmd
 
 def run_contrastive():
@@ -357,21 +371,34 @@ def run_downstream(target_embeddings_path):
 if __name__ == '__main__':
     pipeline_t0 = time.perf_counter()
 
-    if args.skip_cl:
-        print("\n⚠️ ABLATION: Skipping Contrastive Learning")
-        args.contrastive_epochs = 0
-        
-    _timed('Stage 1 - Contrastive Alignment', run_contrastive)
-    
-    if args.disable_generator:
-        print("\n⚠️ ABLATION: Disabling Generative Reconstruction")
-        embeddings_to_use = EMBEDDINGS_PATH
+    if args.reuse_representations_dir:
+        reuse_dir = os.path.abspath(args.reuse_representations_dir)
+        reuse_filename = 'embeddings.pt' if args.disable_generator else 'recon_demo.pt'
+        embeddings_to_use = os.path.join(reuse_dir, reuse_filename)
+        if not os.path.exists(embeddings_to_use):
+            raise FileNotFoundError(
+                f"Cannot reuse representations; required artifact is missing: {embeddings_to_use}"
+            )
+        print(f"\n♻️ Reusing fixed downstream representations: {embeddings_to_use}")
+        _record_timing('Stage 1 - Contrastive Alignment', 0.0)
         _record_timing('Stage 2 - Generator Training', 0.0)
         _record_timing('Stage 2.5 - Smart Reconstruction Demo', 0.0)
     else:
-        _timed('Stage 2 - Generator Training', train_generator)
-        _timed('Stage 2.5 - Smart Reconstruction Demo', run_smart_reconstruction)
-        embeddings_to_use = RECON_DEMO_PATH
+        if args.skip_cl:
+            print("\n⚠️ ABLATION: Skipping Contrastive Learning")
+            args.contrastive_epochs = 0
+
+        _timed('Stage 1 - Contrastive Alignment', run_contrastive)
+
+        if args.disable_generator:
+            print("\n⚠️ ABLATION: Disabling Generative Reconstruction")
+            embeddings_to_use = EMBEDDINGS_PATH
+            _record_timing('Stage 2 - Generator Training', 0.0)
+            _record_timing('Stage 2.5 - Smart Reconstruction Demo', 0.0)
+        else:
+            _timed('Stage 2 - Generator Training', train_generator)
+            _timed('Stage 2.5 - Smart Reconstruction Demo', run_smart_reconstruction)
+            embeddings_to_use = RECON_DEMO_PATH
         
     _timed('Stage 3 - Downstream Tasks (total)', run_downstream, embeddings_to_use)
     _record_timing('Pipeline - End to End', time.perf_counter() - pipeline_t0)

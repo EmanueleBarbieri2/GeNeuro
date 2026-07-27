@@ -191,6 +191,7 @@ def _pipeline_command(args, split_path, checkpoints_dir):
     for enabled, flag in (
         (args.skip_cl, "--skip_cl"),
         (args.disable_generator, "--disable_generator"),
+        (args.no_missingness_mask, "--no_missingness_mask"),
         (args.drop_prodromal, "--drop_prodromal"),
         (args.require_all_active, "--require_all_active"),
         (args.strict_downstream, "--strict_downstream"),
@@ -239,6 +240,7 @@ def main():
     parser.add_argument("--alternate_hub", choices=MODALITIES)
     parser.add_argument("--skip_cl", action="store_true")
     parser.add_argument("--disable_generator", action="store_true")
+    parser.add_argument("--no_missingness_mask", action="store_true")
     parser.add_argument("--drop_prodromal", action="store_true")
     parser.add_argument("--require_all_active", action="store_true")
     parser.add_argument("--strict_downstream", action="store_true")

@@ -141,7 +141,15 @@ def main():
     parser.add_argument('--split_path', required=True)
     parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--hidden_dim', type=int, default=128)
-    parser.add_argument('--use_mask', action='store_true', default=True)
+    mask_group = parser.add_mutually_exclusive_group()
+    mask_group.add_argument('--use_mask', dest='use_mask', action='store_true')
+    mask_group.add_argument(
+        '--no_missingness_mask',
+        dest='use_mask',
+        action='store_false',
+        help='Exclude observed/reconstructed modality indicators from every longitudinal input.',
+    )
+    parser.set_defaults(use_mask=True)
     parser.add_argument('--device', default='cuda')
     
     # --- ABLATION FLAGS ---
@@ -196,7 +204,11 @@ def main():
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, collate_fn=collate_fn, num_workers=2)
 
     input_dim = t_ds[0][0][0].shape[0]
-    print(f"🚀 GRU Sequence Forecaster | Input Dim: {input_dim} | Target: {TARGETS[args.target_idx]}")
+    print(
+        f"🚀 GRU Sequence Forecaster | Input Dim: {input_dim} | "
+        f"Target: {TARGETS[args.target_idx]} | "
+        f"Missingness mask: {'included' if args.use_mask else 'excluded'}"
+    )
     
     model = ForecastingGRU(input_dim=input_dim, hidden_dim=args.hidden_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
@@ -287,6 +299,7 @@ def main():
             "validation_metrics": validation_metrics,
             "metrics": reported_metrics,
             "evaluation_split": "test" if len(test_ds) else "validation",
+            "use_missingness_mask": args.use_mask,
         }, args.progression_ckpt)
         print(f"✅ Saved best GRU sequence model to {args.progression_ckpt}")
 

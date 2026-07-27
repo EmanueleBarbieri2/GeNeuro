@@ -99,6 +99,8 @@ def _run_pipeline_for_fold(fold_idx, args):
         cmd.append("--skip_cl")
     if args.disable_generator:
         cmd.append("--disable_generator")
+    if args.no_missingness_mask:
+        cmd.append("--no_missingness_mask")
     if args.drop_prodromal:
         cmd.append("--drop_prodromal")
     if args.require_all_active:
@@ -261,6 +263,7 @@ if __name__ == "__main__":
                         help="If the requested hub is excluded, use this hub instead")
     parser.add_argument("--skip_cl", action="store_true")
     parser.add_argument("--disable_generator", action="store_true")
+    parser.add_argument("--no_missingness_mask", action="store_true")
     parser.add_argument("--drop_prodromal", action="store_true")
     parser.add_argument("--require_all_active", action="store_true")
     parser.add_argument("--strict_downstream", action="store_true")

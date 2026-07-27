@@ -332,6 +332,7 @@ def _parse_args():
     parser.add_argument("--alternate_hub", choices=MODALITIES)
     parser.add_argument("--skip_cl", action="store_true")
     parser.add_argument("--disable_generator", action="store_true")
+    parser.add_argument("--no_missingness_mask", action="store_true")
     parser.add_argument("--drop_prodromal", action="store_true")
     parser.add_argument("--require_all_active", action="store_true")
     parser.add_argument("--strict_downstream", action="store_true")

@@ -205,7 +205,15 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--dropout', type=float, default=0.5)
-    parser.add_argument('--use_mask', action='store_true', default=True)
+    mask_group = parser.add_mutually_exclusive_group()
+    mask_group.add_argument('--use_mask', dest='use_mask', action='store_true')
+    mask_group.add_argument(
+        '--no_missingness_mask',
+        dest='use_mask',
+        action='store_false',
+        help='Exclude observed/reconstructed modality indicators from the downstream input.',
+    )
+    parser.set_defaults(use_mask=True)
     parser.add_argument('--device', default='cuda')
     
     # --- ABLATION FLAGS ---
@@ -260,7 +268,10 @@ def main():
                              batch_size=args.batch_size, num_workers=2)
 
     input_dim = full_dataset[0][0].shape[0] if len(full_dataset) > 0 else 4100
-    print(f"🚀 UPDRS Regressor | Dim: {input_dim} | Target: {TARGETS[args.target_idx]}")
+    print(
+        f"🚀 UPDRS Regressor | Dim: {input_dim} | Target: {TARGETS[args.target_idx]} | "
+        f"Missingness mask: {'included' if args.use_mask else 'excluded'}"
+    )
     
     raw_model = Regressor(input_dim, dropout=args.dropout).to(device)
     model = raw_model
@@ -292,6 +303,7 @@ def main():
             "validation_metrics": best_metrics,
             "metrics": reported_metrics,
             "evaluation_split": "test" if test_idx else "validation",
+            "use_missingness_mask": args.use_mask,
         }, args.updrs_ckpt)
         print(f"✅ Saved best regressor to {args.updrs_ckpt}")
     

@@ -300,6 +300,11 @@ def _arrays(records, partition, target_index=None):
 def _fit_classification(records, split_name, args, metric_rows, prediction_rows, coefficient_rows):
     x_train, y_train, _, _ = _arrays(records, "train")
     x_eval, y_eval, ids_eval, patients_eval = _arrays(records, split_name)
+    print(
+        f"[classification] train={len(y_train)} visits, "
+        f"{split_name}={len(y_eval)} visits",
+        flush=True,
+    )
     missing_train_classes = set(CLASS_NAMES) - set(y_train)
     missing_eval_classes = set(CLASS_NAMES) - set(y_eval)
     if missing_train_classes:
@@ -313,6 +318,7 @@ def _fit_classification(records, split_name, args, metric_rows, prediction_rows,
         for index, modality in enumerate(MODALITIES)
     )
     for baseline, feature_indices in feature_sets:
+        print(f"[classification] fitting {baseline}...", flush=True)
         model = LogisticRegression(
             class_weight="balanced",
             max_iter=args.logistic_max_iter,
@@ -320,6 +326,13 @@ def _fit_classification(records, split_name, args, metric_rows, prediction_rows,
         )
         model.fit(x_train[:, feature_indices], y_train)
         predictions = model.predict(x_eval[:, feature_indices])
+        baseline_metrics = _classification_metrics(y_eval, predictions)
+        print(
+            f"[classification] {baseline}: "
+            f"balanced_accuracy={baseline_metrics['balanced_accuracy']:.4f}, "
+            f"macro_f1={baseline_metrics['macro_f1']:.4f}",
+            flush=True,
+        )
         metric_rows.append(
             _metric_row(
                 "classification",
@@ -401,10 +414,21 @@ def _fit_static_regression(
 ):
     x_train, y_train, _, _ = _arrays(records, "train", target_index)
     x_eval, y_eval, ids_eval, patients_eval = _arrays(records, split_name, target_index)
+    print(
+        f"[static {target_name}] fitting missingness-only ridge: "
+        f"train={len(y_train)}, {split_name}={len(y_eval)}",
+        flush=True,
+    )
 
     model = Ridge(alpha=args.ridge_alpha)
     model.fit(x_train, y_train)
     predictions = model.predict(x_eval)
+    baseline_metrics = _regression_metrics(y_eval, predictions)
+    print(
+        f"[static {target_name}] R2={baseline_metrics['pipeline_r2']:.4f}, "
+        f"MAE={baseline_metrics['mae']:.4f}",
+        flush=True,
+    )
     metric_rows.append(
         _metric_row(
             "static_severity",
@@ -616,7 +640,9 @@ def _train_progression(train_samples, val_samples, baseline, seed, args, device)
     best_state = None
     best_score = -float("inf")
     epochs_without_improvement = 0
-    for _ in range(args.progression_epochs):
+    completed_epochs = 0
+    for epoch in range(args.progression_epochs):
+        completed_epochs = epoch + 1
         model.train()
         for features, deltas, lengths, next_delta, target in train_loader:
             optimizer.zero_grad(set_to_none=True)
@@ -643,10 +669,21 @@ def _train_progression(train_samples, val_samples, baseline, seed, args, device)
             epochs_without_improvement += 1
             if epochs_without_improvement >= args.early_stopping_patience:
                 break
+        if (epoch + 1) == 1 or (epoch + 1) % 10 == 0:
+            print(
+                f"    epoch {epoch + 1:03d}/{args.progression_epochs} "
+                f"val_R2={_pipeline_r2(val_true, val_prediction):.4f} "
+                f"best={best_score:.4f}",
+                flush=True,
+            )
 
     if best_state is None:
         raise RuntimeError(f"No valid progression model was trained for {baseline}, seed {seed}.")
     model.load_state_dict(best_state)
+    print(
+        f"    finished after {completed_epochs} epochs; best validation score={best_score:.4f}",
+        flush=True,
+    )
     return model
 
 
@@ -686,6 +723,12 @@ def _fit_progression(
     for baseline in args.progression_baselines:
         per_seed_predictions = []
         for seed in args.seeds:
+            print(
+                f"[progression {target_name}] fitting {baseline}, seed={seed} "
+                f"(train={len(samples['train'])}, val={len(samples['val'])}, "
+                f"{split_name}={len(evaluation_samples)})",
+                flush=True,
+            )
             model = _train_progression(
                 samples["train"],
                 samples["val"],
@@ -701,6 +744,13 @@ def _fit_progression(
                 collate_fn=_collate_progression,
             )
             y_true, predictions = _progression_predict(model, evaluation_loader, device)
+            seed_metrics = _regression_metrics(y_true, predictions)
+            print(
+                f"[progression {target_name}] {baseline}, seed={seed}: "
+                f"R2={seed_metrics['pipeline_r2']:.4f}, "
+                f"MAE={seed_metrics['mae']:.4f}",
+                flush=True,
+            )
             per_seed_predictions.append(predictions)
             metric_rows.append(
                 _metric_row(
@@ -729,6 +779,13 @@ def _fit_progression(
             )
 
         ensemble_predictions = np.mean(np.stack(per_seed_predictions), axis=0)
+        ensemble_metrics = _regression_metrics(evaluation_targets, ensemble_predictions)
+        print(
+            f"[progression {target_name}] {baseline} ensemble: "
+            f"R2={ensemble_metrics['pipeline_r2']:.4f}, "
+            f"MAE={ensemble_metrics['mae']:.4f}",
+            flush=True,
+        )
         metric_rows.append(
             _metric_row(
                 "progression",
@@ -891,9 +948,28 @@ def main():
         args.device if args.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
     )
 
+    print("Starting missingness-only downstream audit.", flush=True)
+    print(f"  data_root: {os.path.abspath(args.data_root)}", flush=True)
+    print(f"  split: {os.path.abspath(args.split_path)}", flush=True)
+    print(f"  device: {device}", flush=True)
     split, visit_partition, patient_partition = _load_split(args.split_path)
     split_name = _evaluation_partition(split)
     masks, mask_source = _load_masks(args.data_root, args.recon_path)
+    print(
+        f"Loaded {len(masks)} modality-availability patterns from {mask_source}.",
+        flush=True,
+    )
+    print(
+        "Patient-disjoint split: "
+        + ", ".join(
+            f"{partition}={len(ids)} visits/"
+            f"{len({_patient_id(visit_id) for visit_id in ids})} patients"
+            for partition, ids in split.items()
+            if ids
+        ),
+        flush=True,
+    )
+    print(f"Final evaluation partition: {split_name}", flush=True)
     labels = load_csv_labels(args.data_csv, drop_prodromal=False)
     targets = load_csv_targets(args.data_csv)
     visits = load_csv_visits(args.data_csv)

@@ -170,7 +170,15 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=1024)
     parser.add_argument('--dropout', type=float, default=0.5)
-    parser.add_argument('--use_mask', action='store_true', default=True)
+    mask_group = parser.add_mutually_exclusive_group()
+    mask_group.add_argument('--use_mask', dest='use_mask', action='store_true')
+    mask_group.add_argument(
+        '--no_missingness_mask',
+        dest='use_mask',
+        action='store_false',
+        help='Exclude observed/reconstructed modality indicators from the downstream input.',
+    )
+    parser.set_defaults(use_mask=True)
     parser.add_argument('--device', default='cuda')
     
     parser.add_argument('--exclude_modality', nargs='+', default=None)
@@ -248,7 +256,10 @@ def main():
     weights = torch.tensor([len(train_idx) / (num_classes * counts.get(i, 1)) for i in range(num_classes)]).to(device)
 
     input_dim = full_dataset[0][0].shape[0]
-    print(f"🚀 Classifier Running on {device} | Input Dim: {input_dim} | Classes: {num_classes}")
+    print(
+        f"🚀 Classifier Running on {device} | Input Dim: {input_dim} | "
+        f"Classes: {num_classes} | Missingness mask: {'included' if args.use_mask else 'excluded'}"
+    )
     
     model = Classifier(input_dim, num_classes=num_classes, dropout=args.dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
@@ -301,6 +312,7 @@ def main():
             "validation_metrics": best_metrics,
             "metrics": reported_metrics,
             "evaluation_split": "test" if test_idx else "validation",
+            "use_missingness_mask": args.use_mask,
         }, args.classifier_ckpt)
         print(f"✅ Saved weights to {args.classifier_ckpt}")
 
