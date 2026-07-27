@@ -10,23 +10,28 @@
 
 ## Input artifacts
 
-Save the exact arrays used by the original figures as uncompressed or compressed
-NumPy archives. Each archive must contain a two-dimensional `features` array and
-may contain string or numeric annotation arrays:
+The five input archives can be extracted directly from a completed pipeline run:
 
-```python
-np.savez_compressed(
-    "realEmb.npz",
-    features=embedding_matrix,
-    modality=modality_labels,
-    ids=subject_ids,
-)
+```bash
+python3 model/xplainers/prepare_tsne_inputs.py \
+  --checkpoints_dir model/checkpoints \
+  --split_path data/unified_split_fold0.txt \
+  --partition val
 ```
 
-The supplied `tsne_stability_manifest.example.json` documents the expected keys
-for `realEmb`, `genEmb`, `classEmb`, `sevEmb`, and `progEmb`. Copy it to a new
-manifest and change the paths or keys to match the arrays used for the paper.
-Paths are resolved relative to the manifest.
+For a site-held-out run, use that run's checkpoint directory and split file with
+`--partition test`. The exporter reads `embeddings.pt`, `recon_demo.pt`,
+`classifier.pt`, `static_U3_Motor.pt`, and `prog_U3_Motor.pt`. It writes:
+
+- encoder outputs to `realEmb.npz`;
+- observed and reconstructed modality embeddings to `genEmb.npz`;
+- classifier penultimate-layer representations to `classEmb.npz`;
+- static-regression penultimate-layer representations to `sevEmb.npz`;
+- final GRU hidden states to `progEmb.npz`.
+
+Use `--severity_target U2_ADL` or `--progression_target U2_ADL` to visualize Part
+II instead of the default Part III. The supplied example manifest already
+points to the generated files under `data/visualizations`.
 
 ## Run
 
