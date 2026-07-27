@@ -16,9 +16,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import sklearn
+from matplotlib.colors import ListedColormap
+from matplotlib.lines import Line2D
 from sklearn.manifold import TSNE, trustworthiness
 from sklearn.metrics import silhouette_score
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor, NearestNeighbors
 
 
 DEFAULT_SEEDS = list(range(10))
@@ -60,6 +62,10 @@ def _load_panel(panel, manifest_dir):
         colors = np.asarray(payload[color_key]) if color_key else None
         styles = np.asarray(payload[style_key]) if style_key else None
         ids = np.asarray(payload[id_key]).astype(str) if id_key in payload else np.arange(len(features)).astype(str)
+        annotations = {}
+        for key_name in ("overlay_key", "group_key", "order_key"):
+            key = panel.get(key_name)
+            annotations[key_name] = np.asarray(payload[key]) if key else None
 
     if features.ndim != 2:
         raise ValueError(f"{panel['name']}: features must have shape [samples, dimensions].")
@@ -67,7 +73,15 @@ def _load_panel(panel, manifest_dir):
         raise ValueError(f"{panel['name']}: at least three samples are required.")
     if not np.isfinite(features).all():
         raise ValueError(f"{panel['name']}: features contain NaN or infinite values.")
-    for key, values in ((panel.get("color_key"), colors), (panel.get("style_key"), styles), ("ids", ids)):
+    checked_values = [
+        (panel.get("color_key"), colors),
+        (panel.get("style_key"), styles),
+        ("ids", ids),
+        (panel.get("overlay_key"), annotations["overlay_key"]),
+        (panel.get("group_key"), annotations["group_key"]),
+        (panel.get("order_key"), annotations["order_key"]),
+    ]
+    for key, values in checked_values:
         if values is not None and len(values) != len(features):
             raise ValueError(f"{panel['name']}: {key} length does not match the feature matrix.")
 
@@ -77,6 +91,7 @@ def _load_panel(panel, manifest_dir):
         "colors": colors,
         "styles": styles,
         "ids": ids,
+        "annotations": annotations,
     }
 
 
@@ -146,11 +161,129 @@ def _json_safe(value):
     return value
 
 
-def _plot(ax, coordinates, panel, colors, styles, category_colors=None):
+def _grid(coordinates, resolution):
+    x_min, x_max = coordinates[:, 0].min(), coordinates[:, 0].max()
+    y_min, y_max = coordinates[:, 1].min(), coordinates[:, 1].max()
+    x_pad = max((x_max - x_min) * 0.04, 1e-6)
+    y_pad = max((y_max - y_min) * 0.04, 1e-6)
+    xx, yy = np.meshgrid(
+        np.linspace(x_min - x_pad, x_max + x_pad, resolution),
+        np.linspace(y_min - y_pad, y_max + y_pad, resolution),
+    )
+    return xx, yy, np.column_stack([xx.ravel(), yy.ravel()])
+
+
+def _draw_overlay(ax, coordinates, panel, annotations):
+    overlay = panel.get("overlay")
+    values = annotations.get("overlay_key")
+    if not overlay or values is None:
+        return
+    resolution = int(panel.get("overlay_resolution", 180))
+    neighbors = min(int(panel.get("overlay_neighbors", 15)), len(coordinates))
+    xx, yy, grid_points = _grid(coordinates, resolution)
+
+    if overlay == "classification":
+        categories = sorted(np.unique(values.astype(str)))
+        encoded = np.asarray([categories.index(value) for value in values.astype(str)])
+        estimator = KNeighborsClassifier(n_neighbors=neighbors, weights="distance")
+        estimator.fit(coordinates, encoded)
+        surface = estimator.predict(grid_points).reshape(xx.shape)
+        palette = plt.get_cmap(panel.get("overlay_cmap", "Pastel1"))
+        colors = [palette(index % palette.N) for index in range(len(categories))]
+        ax.contourf(
+            xx,
+            yy,
+            surface,
+            levels=np.arange(len(categories) + 1) - 0.5,
+            cmap=ListedColormap(colors),
+            alpha=float(panel.get("overlay_alpha", 0.45)),
+            antialiased=True,
+        )
+        handles = [
+            Line2D([0], [0], color=colors[index], lw=6, label=category)
+            for index, category in enumerate(categories)
+        ]
+        overlay_legend = ax.legend(
+            handles=handles,
+            title="Projected prediction",
+            loc="lower left",
+            fontsize=7,
+            frameon=True,
+        )
+        ax.add_artist(overlay_legend)
+    elif overlay in {"regression", "trajectory"}:
+        numeric = np.asarray(values, dtype=float)
+        finite = np.isfinite(numeric)
+        if finite.sum() < 2:
+            return
+        estimator = KNeighborsRegressor(
+            n_neighbors=min(neighbors, int(finite.sum())),
+            weights="distance",
+        )
+        estimator.fit(coordinates[finite], numeric[finite])
+        surface = estimator.predict(grid_points).reshape(xx.shape)
+        contour = ax.contourf(
+            xx,
+            yy,
+            surface,
+            levels=int(panel.get("overlay_levels", 24)),
+            cmap=panel.get("overlay_cmap", panel.get("cmap", "magma")),
+            alpha=float(panel.get("overlay_alpha", 0.48)),
+            antialiased=True,
+        )
+        plt.colorbar(contour, ax=ax, label=panel.get("overlay_label", panel.get("color_label", "Prediction")))
+    else:
+        raise ValueError(f"{panel['name']}: unsupported overlay type {overlay!r}")
+
+
+def _draw_trajectories(ax, coordinates, panel, annotations):
+    if panel.get("overlay") != "trajectory":
+        return
+    groups = annotations.get("group_key")
+    order = annotations.get("order_key")
+    if groups is None or order is None:
+        raise ValueError(f"{panel['name']}: trajectory overlay requires group_key and order_key.")
+    groups = groups.astype(str)
+    order = np.asarray(order, dtype=float)
+    for group in sorted(np.unique(groups)):
+        indices = np.flatnonzero(groups == group)
+        if len(indices) < 2:
+            continue
+        indices = indices[np.argsort(order[indices])]
+        ax.plot(
+            coordinates[indices, 0],
+            coordinates[indices, 1],
+            color="black",
+            linewidth=0.8,
+            alpha=0.65,
+            zorder=4,
+        )
+        ax.scatter(
+            coordinates[indices[0], 0],
+            coordinates[indices[0], 1],
+            s=25,
+            facecolor="#9fffc3",
+            edgecolor="#138a4b",
+            linewidth=0.8,
+            zorder=5,
+        )
+        ax.scatter(
+            coordinates[indices[-1], 0],
+            coordinates[indices[-1], 1],
+            s=25,
+            facecolor="#ffd1d1",
+            edgecolor="#b32626",
+            linewidth=0.8,
+            zorder=5,
+        )
+
+
+def _plot(ax, coordinates, panel, colors, styles, annotations, category_colors=None):
     color_mode = panel.get("color_mode", "categorical")
     title = panel.get("title", panel["name"])
     point_size = float(panel.get("point_size", 10))
     alpha = float(panel.get("alpha", 0.72))
+    _draw_overlay(ax, coordinates, panel, annotations)
 
     if colors is None:
         ax.scatter(coordinates[:, 0], coordinates[:, 1], s=point_size, alpha=alpha, linewidths=0)
@@ -166,8 +299,10 @@ def _plot(ax, coordinates, panel, colors, styles, category_colors=None):
             s=point_size,
             alpha=alpha,
             linewidths=0,
+            zorder=3,
         )
-        plt.colorbar(scatter, ax=ax, label=panel.get("color_label", panel.get("color_key", "Value")))
+        if not panel.get("overlay"):
+            plt.colorbar(scatter, ax=ax, label=panel.get("color_label", panel.get("color_key", "Value")))
     else:
         string_colors = colors.astype(str)
         categories = sorted(np.unique(string_colors))
@@ -190,9 +325,17 @@ def _plot(ax, coordinates, panel, colors, styles, category_colors=None):
                     alpha=alpha,
                     linewidths=0,
                     label=category if styles is None else f"{category} | {style}",
+                    zorder=3,
                 )
-        ax.legend(loc="best", fontsize=7, frameon=False, markerscale=1.5)
+        ax.legend(
+            loc="best",
+            title=panel.get("color_label", panel.get("color_key")),
+            fontsize=7,
+            frameon=False,
+            markerscale=1.5,
+        )
 
+    _draw_trajectories(ax, coordinates, panel, annotations)
     ax.set_title(title)
     ax.set_xlabel("t-SNE 1")
     ax.set_ylabel("t-SNE 2")
@@ -267,7 +410,15 @@ def _process_panel(panel, data, global_config, seeds, output_dir):
         }
 
     main_figure, main_axis = plt.subplots(figsize=tuple(panel.get("figsize", [7.0, 5.5])))
-    _plot(main_axis, main_coordinates, panel, data["colors"], data["styles"], category_colors)
+    _plot(
+        main_axis,
+        main_coordinates,
+        panel,
+        data["colors"],
+        data["styles"],
+        data["annotations"],
+        category_colors,
+    )
     main_axis.set_title(f"{panel.get('title', name)} (PCA initialization, seed {main_seed})")
     main_figure.tight_layout()
     main_path = os.path.join(panel_dir, f"{name}.png")
@@ -278,7 +429,15 @@ def _process_panel(panel, data, global_config, seeds, output_dir):
     rows = int(math.ceil(len(seeds) / columns))
     seed_figure, axes = plt.subplots(rows, columns, figsize=(4.2 * columns, 3.6 * rows), squeeze=False)
     for axis, run in zip(axes.flat, runs[1:]):
-        _plot(axis, run["coordinates"], panel, data["colors"], data["styles"], category_colors)
+        _plot(
+            axis,
+            run["coordinates"],
+            panel,
+            data["colors"],
+            data["styles"],
+            data["annotations"],
+            category_colors,
+        )
         axis.set_title(f"Random initialization, seed {run['seed']}")
     for axis in axes.flat[len(seeds):]:
         axis.axis("off")
@@ -419,7 +578,40 @@ def main():
     summary_path = os.path.join(output_dir, "tsne_stability_summary.json")
     with open(summary_path, "w") as handle:
         json.dump(_json_safe(run_summary), handle, indent=2, allow_nan=False)
+    rebuttal_csv_path = os.path.join(output_dir, "tsne_stability_rebuttal_table.csv")
+    with open(rebuttal_csv_path, "w", newline="") as handle:
+        fieldnames = [
+            "panel",
+            "samples",
+            "pca_trustworthiness",
+            "random_trustworthiness_mean",
+            "random_trustworthiness_std",
+            "pca_silhouette",
+            "random_silhouette_mean",
+            "random_silhouette_std",
+            "random_neighbor_jaccard_mean",
+            "random_neighbor_jaccard_std",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for summary in summaries:
+            random_metrics = summary["random_initializations"]
+            writer.writerow(
+                {
+                    "panel": summary["name"],
+                    "samples": summary["samples"],
+                    "pca_trustworthiness": summary["pca_initialization"]["trustworthiness"],
+                    "random_trustworthiness_mean": random_metrics["trustworthiness"]["mean"],
+                    "random_trustworthiness_std": random_metrics["trustworthiness"]["std"],
+                    "pca_silhouette": summary["pca_initialization"]["silhouette"],
+                    "random_silhouette_mean": random_metrics["silhouette"]["mean"],
+                    "random_silhouette_std": random_metrics["silhouette"]["std"],
+                    "random_neighbor_jaccard_mean": random_metrics["mean_neighbor_jaccard"]["mean"],
+                    "random_neighbor_jaccard_std": random_metrics["mean_neighbor_jaccard"]["std"],
+                }
+            )
     print(f"Saved reproducibility summary: {summary_path}")
+    print(f"Saved rebuttal-ready metrics table: {rebuttal_csv_path}")
 
 
 if __name__ == "__main__":

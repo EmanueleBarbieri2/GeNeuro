@@ -193,6 +193,7 @@ def _export_severity(
     active_modalities,
     batch_size,
     device,
+    output_name,
 ):
     checkpoint = _torch_load(checkpoint_path)
     target_index = int(checkpoint["target_idx"])
@@ -217,7 +218,7 @@ def _export_severity(
     model.load_state_dict(checkpoint["model_state"])
     hidden, predictions = _batched_mlp_features(model, inputs, batch_size, device)
     _save(
-        os.path.join(output_dir, "sevEmb.npz"),
+        os.path.join(output_dir, output_name),
         features=_as_numpy(hidden),
         predicted_severity=_as_numpy(predictions[:, 0] * 100.0),
         observed_severity=_as_numpy(observed),
@@ -242,6 +243,23 @@ def _progression_hidden(model, x, deltas, lengths, delta_next):
     return hidden, prediction
 
 
+def _progression_metadata(representation_path, visits):
+    """Mirror SmartSequenceDataset's rolling-window order for plot annotations."""
+    representations = _torch_load(representation_path)
+    patient_ids, trajectory_order, target_visit_ids = [], [], []
+    for patient_id, patient_visits in visits.items():
+        ordered_visits = sorted(patient_visits, key=lambda visit: visit["year"])
+        valid_visits = [
+            visit for visit in ordered_visits
+            if visit["key"] in representations
+        ]
+        for index in range(len(valid_visits) - 1):
+            patient_ids.append(str(patient_id))
+            trajectory_order.append(index)
+            target_visit_ids.append(str(valid_visits[index + 1]["key"]))
+    return patient_ids, trajectory_order, target_visit_ids
+
+
 def _export_progression(
     data_csv,
     representation_path,
@@ -251,6 +269,7 @@ def _export_progression(
     active_modalities,
     batch_size,
     device,
+    output_name,
 ):
     checkpoint = _torch_load(checkpoint_path)
     target_index = int(checkpoint["target_idx"])
@@ -258,6 +277,10 @@ def _export_progression(
     if selected_ids is not None:
         selected_patients = {subject_id.split("_", 1)[0] for subject_id in selected_ids}
         visits = {patient: values for patient, values in visits.items() if patient in selected_patients}
+    patient_ids, trajectory_order, target_visit_ids = _progression_metadata(
+        representation_path,
+        visits,
+    )
     dataset = SmartSequenceDataset(
         representation_path,
         visits,
@@ -296,12 +319,19 @@ def _export_progression(
     hidden = torch.cat(hidden_rows)
     predictions = torch.cat(prediction_rows)
     observed = torch.cat(observed_rows)
+    if len(patient_ids) != len(hidden):
+        raise RuntimeError(
+            "Progression metadata does not match SmartSequenceDataset ordering: "
+            f"{len(patient_ids)} annotations for {len(hidden)} sequences."
+        )
     _save(
-        os.path.join(output_dir, "progEmb.npz"),
+        os.path.join(output_dir, output_name),
         features=_as_numpy(hidden),
         predicted_future_severity=_as_numpy(predictions),
         observed_future_severity=_as_numpy(observed),
-        ids=np.asarray([f"sequence_{index:06d}" for index in range(len(hidden))], dtype=str),
+        patient_id=np.asarray(patient_ids, dtype=str),
+        trajectory_order=np.asarray(trajectory_order, dtype=np.int64),
+        ids=np.asarray(target_visit_ids, dtype=str),
     )
 
 
@@ -320,8 +350,9 @@ def main():
         "--output_dir",
         default=os.path.join(PROJECT_DIR, "data", "visualizations"),
     )
-    parser.add_argument("--severity_target", choices=TARGET_FILES, default="U3_Motor")
-    parser.add_argument("--progression_target", choices=TARGET_FILES, default="U3_Motor")
+    target_choices = ["both", *TARGET_FILES]
+    parser.add_argument("--severity_target", choices=target_choices, default="both")
+    parser.add_argument("--progression_target", choices=target_choices, default="both")
     parser.add_argument("--exclude_modality", nargs="+", default=[], choices=MODALITIES)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--device", default="cpu")
@@ -340,15 +371,6 @@ def main():
     embeddings_path = os.path.join(checkpoints_dir, "embeddings.pt")
     reconstruction_path = os.path.join(checkpoints_dir, "recon_demo.pt")
     classifier_path = os.path.join(checkpoints_dir, "classifier.pt")
-    severity_path = os.path.join(
-        checkpoints_dir,
-        TARGET_FILES[args.severity_target][0],
-    )
-    progression_path = os.path.join(
-        checkpoints_dir,
-        TARGET_FILES[args.progression_target][1],
-    )
-
     _export_real_embeddings(embeddings_path, output_dir, selected_ids)
     _export_reconstructed_embeddings(
         reconstruction_path,
@@ -366,26 +388,34 @@ def main():
         args.batch_size,
         device,
     )
-    _export_severity(
-        args.data_csv,
-        reconstruction_path,
-        severity_path,
-        output_dir,
-        selected_ids,
-        active_modalities,
-        args.batch_size,
-        device,
+    severity_targets = TARGET_FILES if args.severity_target == "both" else [args.severity_target]
+    progression_targets = (
+        TARGET_FILES if args.progression_target == "both" else [args.progression_target]
     )
-    _export_progression(
-        args.data_csv,
-        reconstruction_path,
-        progression_path,
-        output_dir,
-        selected_ids,
-        active_modalities,
-        args.batch_size,
-        device,
-    )
+    for target_name in severity_targets:
+        _export_severity(
+            args.data_csv,
+            reconstruction_path,
+            os.path.join(checkpoints_dir, TARGET_FILES[target_name][0]),
+            output_dir,
+            selected_ids,
+            active_modalities,
+            args.batch_size,
+            device,
+            f"sevEmb_{target_name}.npz",
+        )
+    for target_name in progression_targets:
+        _export_progression(
+            args.data_csv,
+            reconstruction_path,
+            os.path.join(checkpoints_dir, TARGET_FILES[target_name][1]),
+            output_dir,
+            selected_ids,
+            active_modalities,
+            args.batch_size,
+            device,
+            f"progEmb_{target_name}.npz",
+        )
     print(f"All t-SNE input artifacts are ready in {output_dir}")
 
 
