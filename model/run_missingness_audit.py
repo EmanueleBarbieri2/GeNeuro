@@ -101,25 +101,49 @@ def _load_split(path):
     return split, visit_partition, patient_partition
 
 
-def _load_masks(recon_path):
-    if not os.path.exists(recon_path):
-        raise FileNotFoundError(f"Reconstruction artifact not found: {recon_path}")
-    payload = torch.load(recon_path, map_location="cpu", weights_only=False)
-    if not isinstance(payload, dict):
-        raise ValueError("recon_demo.pt must contain a dictionary keyed by visit ID.")
-
-    masks = {}
-    for visit_id, entry in payload.items():
-        if not isinstance(entry, dict) or "real" not in entry:
-            continue
-        real_modalities = entry["real"]
-        masks[str(visit_id)] = np.asarray(
-            [0.0 if modality in real_modalities else 1.0 for modality in MODALITIES],
-            dtype=np.float32,
-        )
+def _load_masks(data_root, recon_path=None):
+    if recon_path:
+        if not os.path.exists(recon_path):
+            raise FileNotFoundError(f"Explicit reconstruction artifact not found: {recon_path}")
+        payload = torch.load(recon_path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, dict):
+            raise ValueError("recon_demo.pt must contain a dictionary keyed by visit ID.")
+        masks = {}
+        for visit_id, entry in payload.items():
+            if not isinstance(entry, dict) or "real" not in entry:
+                continue
+            real_modalities = entry["real"]
+            masks[str(visit_id)] = np.asarray(
+                [0.0 if modality in real_modalities else 1.0 for modality in MODALITIES],
+                dtype=np.float32,
+            )
+        source = os.path.abspath(recon_path)
+    else:
+        availability = {}
+        for modality in MODALITIES:
+            modality_dir = os.path.join(data_root, modality)
+            if not os.path.isdir(modality_dir):
+                raise FileNotFoundError(f"Modality directory not found: {modality_dir}")
+            availability[modality] = {
+                os.path.splitext(filename)[0]
+                for filename in os.listdir(modality_dir)
+                if filename.endswith(".pt")
+            }
+        visit_ids = set().union(*availability.values())
+        masks = {
+            visit_id: np.asarray(
+                [
+                    0.0 if visit_id in availability[modality] else 1.0
+                    for modality in MODALITIES
+                ],
+                dtype=np.float32,
+            )
+            for visit_id in visit_ids
+        }
+        source = os.path.abspath(data_root)
     if not masks:
         raise ValueError("No observed/reconstructed modality indicators were found.")
-    return masks
+    return masks, source
 
 
 def _evaluation_partition(split):
@@ -817,15 +841,20 @@ def parse_args():
     )
     parser.add_argument(
         "--split_path",
-        default=os.path.join(PROJECT_DIR, "data", "unified_split_master.txt"),
+        default=os.path.join(PROJECT_DIR, "data", "unified_split_fold0.txt"),
     )
     parser.add_argument(
-        "--checkpoints_dir",
-        default=os.path.join(PROJECT_DIR, "model", "checkpoints"),
+        "--data_root",
+        default=os.path.join(PROJECT_DIR, "data"),
+        help="Directory containing SPECT, MRI, fMRI, and DTI subdirectories.",
     )
     parser.add_argument(
         "--recon_path",
-        help="Override CHECKPOINTS_DIR/recon_demo.pt.",
+        help="Optional recon_demo.pt override; normally unnecessary.",
+    )
+    parser.add_argument(
+        "--checkpoints_dir",
+        help="Deprecated compatibility option; checkpoints are not required.",
     )
     parser.add_argument(
         "--output_dir",
@@ -856,9 +885,6 @@ def parse_args():
 def main():
     args = parse_args()
     _set_seed(args.seed)
-    recon_path = os.path.abspath(
-        args.recon_path or os.path.join(args.checkpoints_dir, "recon_demo.pt")
-    )
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     device = torch.device(
@@ -867,7 +893,7 @@ def main():
 
     split, visit_partition, patient_partition = _load_split(args.split_path)
     split_name = _evaluation_partition(split)
-    masks = _load_masks(recon_path)
+    masks, mask_source = _load_masks(args.data_root, args.recon_path)
     labels = load_csv_labels(args.data_csv, drop_prodromal=False)
     targets = load_csv_targets(args.data_csv)
     visits = load_csv_visits(args.data_csv)
@@ -928,7 +954,7 @@ def main():
     summary = {
         "data_csv": os.path.abspath(args.data_csv),
         "split_path": os.path.abspath(args.split_path),
-        "recon_path": recon_path,
+        "mask_source": mask_source,
         "evaluation_split": split_name,
         "device": str(device),
         "mask_order": list(MODALITIES),

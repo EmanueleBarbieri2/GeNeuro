@@ -1,8 +1,9 @@
 # Missingness-only downstream audit
 
 `run_missingness_audit.py` measures how much downstream performance can be
-obtained from acquisition patterns without using any imaging embedding values.
-It reads the four indicators derived from `recon_demo.pt` in this order:
+obtained from acquisition patterns without using any imaging embedding values
+or trained checkpoints. It derives four indicators from the presence of scan
+files under `data/SPECT`, `data/MRI`, `data/fMRI`, and `data/DTI`, in this order:
 
 ```text
 SPECT, MRI, fMRI, DTI
@@ -32,9 +33,9 @@ final evaluation; otherwise validation performance is reported explicitly.
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 python3 model/run_missingness_audit.py \
-  --checkpoints_dir model/checkpoints/tsne_fold0 \
   --data_csv data/PPMI_Curated_Data_Cut_Public_20251112.csv \
-  --split_path data/unified_split_master.txt \
+  --data_root data \
+  --split_path data/unified_split_fold0.txt \
   --output_dir model/results/missingness_audit \
   --device cuda
 ```
@@ -43,8 +44,8 @@ The models are small, so CPU execution is also practical:
 
 ```bash
 python3 model/run_missingness_audit.py \
-  --checkpoints_dir model/checkpoints/tsne_fold0 \
-  --split_path data/unified_split_master.txt \
+  --data_root data \
+  --split_path data/unified_split_fold0.txt \
   --device cpu
 ```
 
