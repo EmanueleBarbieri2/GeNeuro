@@ -11,8 +11,17 @@ import os
 import random
 import sys
 import time
+import warnings
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+
+# PyG has a correct native fallback when the optional torch-scatter package is
+# unavailable.  Its per-call advisory otherwise overwhelms long nohup logs.
+warnings.filterwarnings(
+    "ignore",
+    message=r"The usage of `scatter\(reduce='max'\)` can be accelerated.*",
+    category=UserWarning,
+)
 
 import numpy as np
 import torch
@@ -42,7 +51,7 @@ from model.encoders import DTIEncoder, MRIEncoder, SPECTEncoder, fMRIEncoder  # 
 
 MODALITIES = ("SPECT", "MRI", "fMRI", "DTI")
 CLASS_NAMES = ("Control", "PD", "Prodromal")
-CLASS_TO_INDEX = {name: index for index, name in enumerate(CLASS_NAMES)}
+BINARY_CLASS_NAMES = ("Control", "PD")
 PARTITIONS = ("train", "val", "test")
 TARGETS = ((1, "U2_ADL"), (2, "U3_Motor"))
 TASKS = (
@@ -489,7 +498,7 @@ class FusionEncoder(nn.Module):
 
 
 class ClassificationModel(nn.Module):
-    def __init__(self, fusion, dropout):
+    def __init__(self, fusion, dropout, num_classes):
         super().__init__()
         self.fusion = fusion
         self.head = nn.Sequential(
@@ -501,7 +510,7 @@ class ClassificationModel(nn.Module):
             SafeBatchNorm1d(128),
             nn.GELU(),
             nn.Dropout(dropout * 0.6),
-            nn.Linear(128, len(CLASS_NAMES)),
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, batch, device):
@@ -596,9 +605,18 @@ class ProgressionModel(nn.Module):
         )
 
 
-def _build_visit_records(values, visit_partition, graph_store, modalities, target_index=None):
+def _build_visit_records(
+    values,
+    visit_partition,
+    graph_store,
+    modalities,
+    target_index=None,
+    eligible_ids=None,
+):
     records = {partition: [] for partition in PARTITIONS}
     for visit_id, value in values.items():
+        if eligible_ids is not None and visit_id not in eligible_ids:
+            continue
         partition = visit_partition.get(visit_id)
         if partition is None:
             continue
@@ -630,13 +648,21 @@ def _build_progression_records(
     graph_store,
     modalities,
     target_index,
+    eligible_ids=None,
 ):
     records = {partition: [] for partition in PARTITIONS}
     for patient_id, patient_visits in visits.items():
         partition = patient_partition.get(str(patient_id))
         if partition is None:
             continue
-        ordered = sorted(patient_visits, key=lambda visit: visit["year"])
+        ordered = sorted(
+            (
+                visit
+                for visit in patient_visits
+                if eligible_ids is None or visit["key"] in eligible_ids
+            ),
+            key=lambda visit: visit["year"],
+        )
         if len(modalities) == 1:
             valid = [
                 visit
@@ -684,7 +710,10 @@ def _make_loader(dataset, batch_size, shuffle, seed, collate, drop_singleton=Fal
     )
 
 
-def _classification_arrays(model, loader, device):
+def _classification_arrays(model, loader, device, class_names):
+    class_to_index = {
+        name: index for index, name in enumerate(class_names)
+    }
     model.eval()
     targets, predictions, probabilities = [], [], []
     with torch.no_grad():
@@ -692,7 +721,7 @@ def _classification_arrays(model, loader, device):
             logits = model(batch, device)
             probabilities.append(F.softmax(logits, dim=1).cpu().numpy())
             predictions.extend(logits.argmax(dim=1).cpu().tolist())
-            targets.extend(CLASS_TO_INDEX[record.value] for record in batch["records"])
+            targets.extend(class_to_index[record.value] for record in batch["records"])
     return (
         np.asarray(targets, dtype=int),
         np.asarray(predictions, dtype=int),
@@ -700,25 +729,91 @@ def _classification_arrays(model, loader, device):
     )
 
 
-def _classification_metrics(targets, predictions, probabilities):
+def _classification_metrics(targets, predictions, probabilities, class_names):
     metrics = {
         "bal_acc": float(balanced_accuracy_score(targets, predictions)),
         "acc": float(accuracy_score(targets, predictions)),
         "f1_macro": float(f1_score(targets, predictions, average="macro", zero_division=0)),
     }
     try:
-        metrics["auc_macro"] = float(
-            roc_auc_score(
-                targets,
-                probabilities,
-                labels=np.arange(len(CLASS_NAMES)),
-                multi_class="ovr",
-                average="macro",
+        if len(class_names) == 2:
+            metrics["auc_macro"] = float(roc_auc_score(targets, probabilities[:, 1]))
+        else:
+            metrics["auc_macro"] = float(
+                roc_auc_score(
+                    targets,
+                    probabilities,
+                    labels=np.arange(len(class_names)),
+                    multi_class="ovr",
+                    average="macro",
+                )
             )
-        )
     except ValueError:
         metrics["auc_macro"] = math.nan
     return metrics
+
+
+def _availability_only_diagnostic(split_info, labels, graph_store, eligible_ids, fold):
+    class_to_index = {
+        name: index for index, name in enumerate(CLASS_NAMES)
+    }
+    pattern_counts = defaultdict(Counter)
+    global_counts = Counter()
+    test_rows = []
+    for visit_id, label in labels.items():
+        if visit_id not in eligible_ids:
+            continue
+        partition = split_info["visit_partition"].get(visit_id)
+        if partition not in {"train", "test"}:
+            continue
+        pattern = tuple(
+            int(graph_store.has(modality, visit_id)) for modality in MODALITIES
+        )
+        if partition == "train":
+            pattern_counts[pattern][label] += 1
+            global_counts[label] += 1
+        else:
+            test_rows.append((label, pattern))
+    if not test_rows or any(global_counts[name] == 0 for name in CLASS_NAMES):
+        return {
+            "fold": fold,
+            "status": "not_evaluable",
+            "reason": "Availability-only diagnostic lacks samples or a training class.",
+        }
+    targets_array = []
+    predictions = []
+    probabilities = []
+    for label, pattern in test_rows:
+        counts = pattern_counts.get(pattern) or global_counts
+        smoothed = np.asarray(
+            [counts[name] + 1.0 for name in CLASS_NAMES],
+            dtype=float,
+        )
+        probability = smoothed / smoothed.sum()
+        targets_array.append(class_to_index[label])
+        predictions.append(int(probability.argmax()))
+        probabilities.append(probability)
+    metrics = _classification_metrics(
+        np.asarray(targets_array, dtype=int),
+        np.asarray(predictions, dtype=int),
+        np.asarray(probabilities, dtype=float),
+        CLASS_NAMES,
+    )
+    return {
+        "fold": fold,
+        "status": "ok",
+        "train_samples": sum(global_counts.values()),
+        "test_samples": len(test_rows),
+        "train_patterns": len(pattern_counts),
+        **metrics,
+        "train_pattern_counts": json.dumps(
+            {
+                "".join(map(str, pattern)): dict(sorted(counts.items()))
+                for pattern, counts in sorted(pattern_counts.items())
+            },
+            sort_keys=True,
+        ),
+    }
 
 
 def _regression_arrays(model, loader, device, progression):
@@ -761,6 +856,19 @@ def _class_counts(records):
     }
 
 
+def _record_identity(records):
+    identifiers = sorted(
+        record.sample_id if isinstance(record, ProgressionRecord) else record.visit_id
+        for record in records
+    )
+    digest = hashlib.sha256("\n".join(identifiers).encode("utf-8")).hexdigest()
+    return {
+        "test_samples": len(identifiers),
+        "test_patients": len({record.patient_id for record in records}),
+        "test_ids_sha256": digest,
+    }
+
+
 def _not_evaluable(task, reason, counts):
     return {
         "status": "not_evaluable",
@@ -772,13 +880,33 @@ def _not_evaluable(task, reason, counts):
 
 def _train_classification(records, modalities, graph_store, args, device, seed):
     counts = _class_counts(records)
+    class_sets = [set(counts[partition]) for partition in PARTITIONS]
+    if all(set(CLASS_NAMES).issubset(classes) for classes in class_sets):
+        class_names = CLASS_NAMES
+    elif all(set(BINARY_CLASS_NAMES).issubset(classes) for classes in class_sets) and all(
+        "Prodromal" not in classes for classes in class_sets
+    ):
+        class_names = BINARY_CLASS_NAMES
+    else:
+        missing_by_partition = {
+            partition: sorted(set(CLASS_NAMES) - set(counts[partition]))
+            for partition in PARTITIONS
+        }
+        return _not_evaluable(
+            "classification",
+            (
+                "Neither a consistent three-class task nor a consistent binary "
+                f"Control-vs-PD task is defined: {missing_by_partition}."
+            ),
+            counts,
+        )
     for partition in PARTITIONS:
-        missing = set(CLASS_NAMES) - set(counts[partition])
+        missing = set(class_names) - set(counts[partition])
         if missing:
             return _not_evaluable(
                 "classification",
                 (
-                    f"Three-class classification is undefined because {partition} "
+                    f"{len(class_names)}-class classification is undefined because {partition} "
                     f"has no observed samples for classes {sorted(missing)}."
                 ),
                 counts,
@@ -802,12 +930,15 @@ def _train_classification(records, modalities, graph_store, args, device, seed):
         args.edge_threshold,
         args.multimodal_missingness_mask,
     )
-    model = ClassificationModel(fusion, args.dropout).to(device)
+    model = ClassificationModel(fusion, args.dropout, len(class_names)).to(device)
     class_counter = Counter(record.value for record in records["train"])
+    class_to_index = {
+        name: index for index, name in enumerate(class_names)
+    }
     weights = torch.tensor(
         [
-            len(records["train"]) / (len(CLASS_NAMES) * class_counter[class_name])
-            for class_name in CLASS_NAMES
+            len(records["train"]) / (len(class_names) * class_counter[class_name])
+            for class_name in class_names
         ],
         dtype=torch.float32,
         device=device,
@@ -821,7 +952,7 @@ def _train_classification(records, modalities, graph_store, args, device, seed):
         model.train()
         for batch in train_loader:
             targets = torch.tensor(
-                [CLASS_TO_INDEX[record.value] for record in batch["records"]],
+                [class_to_index[record.value] for record in batch["records"]],
                 dtype=torch.long,
                 device=device,
             )
@@ -830,8 +961,12 @@ def _train_classification(records, modalities, graph_store, args, device, seed):
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
             optimizer.step()
-        val_true, val_pred, val_prob = _classification_arrays(model, val_loader, device)
-        val_metrics = _classification_metrics(val_true, val_pred, val_prob)
+        val_true, val_pred, val_prob = _classification_arrays(
+            model, val_loader, device, class_names
+        )
+        val_metrics = _classification_metrics(
+            val_true, val_pred, val_prob, class_names
+        )
         score = val_metrics["bal_acc"]
         if score > best_score + args.min_delta:
             best_score = score
@@ -848,15 +983,24 @@ def _train_classification(records, modalities, graph_store, args, device, seed):
         if epochs_without_improvement >= args.patience:
             break
     model.load_state_dict(best_state)
-    test_true, test_pred, test_prob = _classification_arrays(model, test_loader, device)
+    test_true, test_pred, test_prob = _classification_arrays(
+        model, test_loader, device, class_names
+    )
     return {
         "status": "ok",
         "task": "classification",
-        "metrics": _classification_metrics(test_true, test_pred, test_prob),
+        "metrics": _classification_metrics(
+            test_true, test_pred, test_prob, class_names
+        ),
+        "class_names": list(class_names),
+        "n_classes": len(class_names),
+        "trainable_parameters": sum(
+            parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+        ),
         "validation_best": best_score,
         "epochs_completed": epoch + 1,
         "counts": counts,
-        "test_patients": len({record.patient_id for record in records["test"]}),
+        **_record_identity(records["test"]),
     }
 
 
@@ -930,9 +1074,13 @@ def _train_static(records, modalities, graph_store, args, device, seed, task):
         "status": "ok",
         "task": task,
         "metrics": _regression_metrics(test_true, test_pred),
+        "trainable_parameters": sum(
+            parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+        ),
         "validation_best": best_score,
         "epochs_completed": epoch + 1,
         "counts": counts,
+        **_record_identity(records["test"]),
     }
 
 
@@ -1019,9 +1167,13 @@ def _train_progression(records, modalities, graph_store, args, device, seed, tas
         "status": "ok",
         "task": task,
         "metrics": _regression_metrics(test_true, test_pred),
+        "trainable_parameters": sum(
+            parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+        ),
         "validation_best": best_score,
         "epochs_completed": epoch + 1,
         "counts": counts,
+        **_record_identity(records["test"]),
     }
 
 
@@ -1039,6 +1191,11 @@ def _run_one(
 ):
     configuration = BASELINES[baseline]
     modalities = configuration["modalities"]
+    eligible_ids = (
+        split_info.get("full_model_available_ids")
+        if baseline == "multimodal"
+        else None
+    )
     seed = _stable_seed(args.seed, fold, baseline, task)
     _set_seed(seed)
     if task == "classification":
@@ -1047,6 +1204,7 @@ def _run_one(
             split_info["visit_partition"],
             graph_store,
             modalities,
+            eligible_ids=eligible_ids,
         )
         return _train_classification(
             records, modalities, graph_store, args, device, seed
@@ -1059,6 +1217,7 @@ def _run_one(
             graph_store,
             modalities,
             target_index,
+            eligible_ids=eligible_ids,
         )
         return _train_static(
             records, modalities, graph_store, args, device, seed, task
@@ -1069,13 +1228,80 @@ def _run_one(
         graph_store,
         modalities,
         target_index,
+        eligible_ids=eligible_ids,
     )
     return _train_progression(
         records, modalities, graph_store, args, device, seed, task
     )
 
 
-def _load_full_model_result(checkpoint_path, task, fold):
+class _VisitAvailability:
+    def __init__(self, visit_ids):
+        self.visit_ids = set(visit_ids)
+
+    def has(self, _modality, visit_id):
+        return visit_id in self.visit_ids
+
+    def any(self, _modalities, visit_id):
+        return visit_id in self.visit_ids
+
+
+def _load_reconstruction_ids(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            "A matched comparison requires the full model's reconstruction artifact: "
+            f"{path}"
+        )
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected recon_demo.pt to be keyed by visit ID: {path}")
+    return set(payload)
+
+
+def _expected_full_model_identity(
+    task,
+    split_info,
+    reconstruction_ids,
+    labels,
+    targets,
+    visits,
+):
+    availability = _VisitAvailability(reconstruction_ids)
+    if task == "classification":
+        records = _build_visit_records(
+            labels,
+            split_info["visit_partition"],
+            availability,
+            ("full_model",),
+        )
+    elif task.startswith("static"):
+        target_index = 1 if task.endswith("u2") else 2
+        records = _build_visit_records(
+            targets,
+            split_info["visit_partition"],
+            availability,
+            ("full_model",),
+            target_index,
+        )
+    else:
+        target_index = 1 if task.endswith("u2") else 2
+        records = _build_progression_records(
+            visits,
+            split_info["patient_partition"],
+            availability,
+            ("full_model",),
+            target_index,
+        )
+    return _record_identity(records["test"])
+
+
+def _load_full_model_result(
+    checkpoint_path,
+    task,
+    fold,
+    expected_use_missingness_mask,
+    expected_identity,
+):
     if not os.path.exists(checkpoint_path):
         return {
             "status": "missing",
@@ -1091,7 +1317,33 @@ def _load_full_model_result(checkpoint_path, task, fold):
     metrics = payload.get("metrics")
     if not isinstance(metrics, dict):
         raise ValueError(f"No metrics dictionary in {checkpoint_path}")
-    return {"status": "ok", "task": task, "metrics": metrics, "source": checkpoint_path}
+    actual_mask = payload.get("use_missingness_mask")
+    if actual_mask is None:
+        raise ValueError(
+            f"Checkpoint does not record use_missingness_mask, so comparability cannot "
+            f"be established: {checkpoint_path}"
+        )
+    if bool(actual_mask) != bool(expected_use_missingness_mask):
+        raise ValueError(
+            f"Mask-policy mismatch in {checkpoint_path}: checkpoint records "
+            f"use_missingness_mask={actual_mask}, expected "
+            f"{expected_use_missingness_mask}. Point --full_model_root to the "
+            "corresponding full-model run."
+        )
+    model_state = payload.get("model_state") or {}
+    return {
+        "status": "ok",
+        "task": task,
+        "metrics": metrics,
+        "source": checkpoint_path,
+        "use_missingness_mask": bool(actual_mask),
+        "class_names": list(payload.get("class_names", [])),
+        "n_classes": payload.get("num_classes", ""),
+        "trainable_parameters": sum(
+            value.numel() for value in model_state.values() if torch.is_tensor(value)
+        ),
+        **expected_identity,
+    }
 
 
 def _mean_sd(values):
@@ -1193,6 +1445,8 @@ def _write_latex(path, summary_rows):
     for task, metric, _ in TABLE_COLUMNS:
         candidates = []
         for baseline in baseline_order:
+            if task == "classification" and baseline in {"spect", "dti"}:
+                continue
             row = lookup.get((baseline, task, metric))
             if row is not None and row["status"] == "ok":
                 candidates.append((float(row["mean"]), baseline))
@@ -1206,8 +1460,12 @@ def _write_latex(path, summary_rows):
             r"Values are mean $\pm$ sample standard deviation across five outer folds. "
             r"Each outer test fold contains sites absent from both training and validation. "
             r"Unimodal baselines use only genuinely observed scans. The naïve multimodal "
-            r"baseline zero-fills unavailable modality slots and includes availability indicators, "
+            r"baseline zero-fills unavailable modality slots without availability indicators, "
             r"without contrastive alignment or generative reconstruction. "
+            r"SPECT and DTI classification ($^\dagger$) is binary Control versus PD because "
+            r"no Prodromal acquisitions exist for those modalities; all other classification "
+            r"rows are three-class and binary/three-class values are not ranked against each other. "
+            r"MRI progression is unavailable because no patient has repeated observed MRI. "
             r"Dashes indicate that a valid evaluation was unavailable.}"
         ),
         r"\label{tab:sota_comparison_site_holdout}",
@@ -1234,6 +1492,8 @@ def _write_latex(path, summary_rows):
         else:
             model_label = BASELINES[baseline]["model"]
             modality_label = BASELINES[baseline]["modality_label"]
+            if baseline in {"spect", "dti"}:
+                modality_label += r"$^\dagger$"
         cells = []
         for task, metric, _ in TABLE_COLUMNS:
             row = lookup.get((baseline, task, metric))
@@ -1251,6 +1511,82 @@ def _write_latex(path, summary_rows):
             r"\end{tabular}%",
             r"}",
             r"\end{table}",
+        ]
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
+def _write_diagnostic_report(
+    path,
+    summary_rows,
+    availability_summary,
+    comparison_audit_rows,
+):
+    lookup = _summary_lookup(summary_rows)
+    availability_lookup = {
+        row["metric"]: row for row in availability_summary
+    }
+    all_matched = bool(comparison_audit_rows) and all(
+        row["matched"] for row in comparison_audit_rows
+    )
+    lines = [
+        "# GCN+GINE versus full-model diagnostic",
+        "",
+        f"- Exact test-sample hashes matched in every audited fold/task: **{all_matched}**.",
+        "- Both compared rows exclude the four explicit availability indicators.",
+        "- The raw GCN+GINE encoders are optimized end-to-end for each supervised task; "
+        "the full model uses representations constrained by contrastive alignment and "
+        "generative reconstruction.",
+        "- Zero-filled raw modality blocks still expose acquisition availability, even "
+        "without explicit flags.",
+        "",
+        "## Mean outer-fold differences",
+        "",
+        "| Metric | Raw GCN+GINE | Full model | Raw − full |",
+        "|---|---:|---:|---:|",
+    ]
+    for task, metric, label in TABLE_COLUMNS:
+        raw = lookup.get(("multimodal", task, metric))
+        full = lookup.get(("full_model", task, metric))
+        if (
+            raw is None
+            or full is None
+            or raw["status"] != "ok"
+            or full["status"] != "ok"
+        ):
+            continue
+        raw_mean = float(raw["mean"])
+        full_mean = float(full["mean"])
+        lines.append(
+            f"| {label} | {raw_mean:.4f} | {full_mean:.4f} | "
+            f"{raw_mean - full_mean:+.4f} |"
+        )
+    lines.extend(["", "## Availability-only classification", ""])
+    for metric, label in (
+        ("bal_acc", "Balanced accuracy"),
+        ("f1_macro", "Macro F1"),
+        ("auc_macro", "Macro AUC"),
+    ):
+        row = availability_lookup.get(metric)
+        if row:
+            lines.append(
+                f"- {label}: {float(row['mean']):.4f} ± {float(row['sd']):.4f} "
+                f"across {row['n_folds']} folds."
+            )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "A positive raw-minus-full difference is an observed performance difference, "
+            "not proof that raw fusion learned better pathology. If the availability-only "
+            "scores are high, label-dependent acquisition patterns are a supported shortcut "
+            "explanation. Remaining explanations include task-specific end-to-end optimization, "
+            "contrastive/reconstruction objectives that trade discriminative information for "
+            "alignment, and hyperparameters selected for the original rather than external-site "
+            "distribution. There is no theoretical requirement that the full model outperform "
+            "a supervised raw-graph model on every endpoint.",
         ]
     )
     with open(path, "w", encoding="utf-8") as handle:
@@ -1279,6 +1615,14 @@ def parse_args():
         )
     )
     parser.add_argument("--site_cv_root", required=True)
+    parser.add_argument(
+        "--full_model_root",
+        default=None,
+        help=(
+            "Fold root containing the full-model checkpoints/recon_demo.pt to compare. "
+            "Defaults to --site_cv_root; its splits must exactly match."
+        ),
+    )
     parser.add_argument(
         "--data_root",
         default=os.path.join(PROJECT_DIR, "data"),
@@ -1319,10 +1663,10 @@ def parse_args():
     parser.add_argument(
         "--multimodal_missingness_mask",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Append availability indicators to the naïve multimodal zero-filled "
-            "representation (enabled by default)."
+            "representation (disabled by default for the matched comparison)."
         ),
     )
     parser.add_argument("--no_cache_graphs", action="store_true")
@@ -1339,9 +1683,11 @@ def parse_args():
 def main():
     args = parse_args()
     site_cv_root = os.path.abspath(args.site_cv_root)
+    full_model_root = os.path.abspath(args.full_model_root or args.site_cv_root)
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     fold_dirs = _find_fold_dirs(site_cv_root, args.folds)
+    full_fold_dirs = _find_fold_dirs(full_model_root, args.folds)
     graph_store = GraphStore(args.data_root, cache=not args.no_cache_graphs)
     visit_sites = _load_site_metadata(args.data_csv)
     labels = load_csv_labels(args.data_csv, drop_prodromal=False)
@@ -1352,6 +1698,7 @@ def main():
     )
     print("Starting unified site-held-out baseline experiment.", flush=True)
     print(f"  site folds: {site_cv_root}", flush=True)
+    print(f"  full model: {full_model_root}", flush=True)
     print(f"  output: {output_dir}", flush=True)
     print(f"  device: {device}", flush=True)
     print(f"  baselines: {', '.join(args.baselines)}", flush=True)
@@ -1359,6 +1706,8 @@ def main():
 
     split_audits = {}
     split_infos = {}
+    full_model_results = []
+    availability_diagnostics = []
     for fold, paths in fold_dirs.items():
         partitions, patients, visit_partition, patient_partition, comments = _load_split(
             paths["split_path"]
@@ -1374,6 +1723,31 @@ def main():
             "visit_partition": visit_partition,
             "patient_partition": patient_partition,
         }
+        full_partitions, _, _, _, _ = _load_split(
+            full_fold_dirs[fold]["split_path"]
+        )
+        if any(
+            set(partitions[partition]) != set(full_partitions[partition])
+            for partition in PARTITIONS
+        ):
+            raise ValueError(
+                f"Fold {fold} differs between --site_cv_root and --full_model_root; "
+                "the comparison would not use the same splits."
+            )
+        reconstruction_path = os.path.join(
+            full_fold_dirs[fold]["fold_dir"], "checkpoints", "recon_demo.pt"
+        )
+        reconstruction_ids = _load_reconstruction_ids(reconstruction_path)
+        split_infos[fold]["full_model_available_ids"] = reconstruction_ids
+        availability_diagnostics.append(
+            _availability_only_diagnostic(
+                split_infos[fold],
+                labels,
+                graph_store,
+                reconstruction_ids,
+                fold,
+            )
+        )
         split_audits[str(fold)] = {
             "path": paths["split_path"],
             "comments": comments,
@@ -1390,6 +1764,35 @@ def main():
                 for partition in PARTITIONS
             },
         }
+        if args.include_full_model:
+            for task, filename in FULL_MODEL_FILES.items():
+                identity = _expected_full_model_identity(
+                    task,
+                    split_infos[fold],
+                    reconstruction_ids,
+                    labels,
+                    targets,
+                    visits,
+                )
+                result = _load_full_model_result(
+                    os.path.join(
+                        full_fold_dirs[fold]["fold_dir"],
+                        "checkpoints",
+                        filename,
+                    ),
+                    task,
+                    fold,
+                    args.multimodal_missingness_mask,
+                    identity,
+                )
+                result.update(
+                    {
+                        "fold": fold,
+                        "baseline": "full_model",
+                        "modalities": list(MODALITIES),
+                    }
+                )
+                full_model_results.append(result)
 
     all_results = []
     total_runs = len(args.folds) * len(args.baselines) * len(args.tasks)
@@ -1413,6 +1816,16 @@ def main():
                 if os.path.exists(result_path) and not args.restart:
                     with open(result_path, encoding="utf-8") as handle:
                         result = json.load(handle)
+                    if result.get("multimodal_missingness_mask") != args.multimodal_missingness_mask:
+                        raise ValueError(
+                            f"Stale result has a different missingness-mask policy: "
+                            f"{result_path}. Use a new --output_dir or --restart."
+                        )
+                    if result.get("status") == "ok" and not result.get("test_ids_sha256"):
+                        raise ValueError(
+                            f"Stale result predates matched-sample auditing: {result_path}. "
+                            "Use a new --output_dir or --restart."
+                        )
                     print(f"    resumed: {result['status']}", flush=True)
                 else:
                     run_started = time.time()
@@ -1447,21 +1860,42 @@ def main():
                 all_results.append(result)
 
     if args.include_full_model:
+        all_results.extend(full_model_results)
+
+    comparison_audit_rows = []
+    if "multimodal" in args.baselines and args.include_full_model:
+        indexed = {
+            (result["fold"], result["baseline"], result["task"]): result
+            for result in all_results
+        }
         for fold in args.folds:
-            for task, filename in FULL_MODEL_FILES.items():
-                result = _load_full_model_result(
-                    os.path.join(fold_dirs[fold]["fold_dir"], "checkpoints", filename),
-                    task,
-                    fold,
+            for task in args.tasks:
+                raw = indexed[(fold, "multimodal", task)]
+                full = indexed[(fold, "full_model", task)]
+                matched = (
+                    raw.get("test_samples") == full.get("test_samples")
+                    and raw.get("test_ids_sha256") == full.get("test_ids_sha256")
                 )
-                result.update(
+                comparison_audit_rows.append(
                     {
                         "fold": fold,
-                        "baseline": "full_model",
-                        "modalities": list(MODALITIES),
+                        "task": task,
+                        "matched": matched,
+                        "raw_test_samples": raw.get("test_samples", ""),
+                        "full_test_samples": full.get("test_samples", ""),
+                        "raw_test_patients": raw.get("test_patients", ""),
+                        "full_test_patients": full.get("test_patients", ""),
+                        "raw_test_ids_sha256": raw.get("test_ids_sha256", ""),
+                        "full_test_ids_sha256": full.get("test_ids_sha256", ""),
+                        "raw_trainable_parameters": raw.get("trainable_parameters", ""),
+                        "full_head_parameters": full.get("trainable_parameters", ""),
                     }
                 )
-                all_results.append(result)
+                if not matched:
+                    raise RuntimeError(
+                        f"Matched-sample audit failed for fold={fold}, task={task}. "
+                        "No aggregate table was emitted."
+                    )
 
     per_fold_rows = []
     for result in all_results:
@@ -1471,6 +1905,12 @@ def main():
             "task": result["task"],
             "status": result["status"],
             "reason": result.get("reason", ""),
+            "n_classes": result.get("n_classes", ""),
+            "class_names": "|".join(result.get("class_names", [])),
+            "test_samples": result.get("test_samples", ""),
+            "test_patients": result.get("test_patients", ""),
+            "test_ids_sha256": result.get("test_ids_sha256", ""),
+            "trainable_parameters": result.get("trainable_parameters", ""),
         }
         if result["status"] == "ok":
             for metric, value in result["metrics"].items():
@@ -1478,13 +1918,44 @@ def main():
         else:
             per_fold_rows.append({**base, "metric": "", "value": ""})
     summary_rows = _aggregate(all_results, args.folds)
+    availability_summary = []
+    for metric in ("bal_acc", "f1_macro", "auc_macro"):
+        values = [
+            float(row[metric])
+            for row in availability_diagnostics
+            if row.get("status") == "ok" and np.isfinite(row.get(metric, math.nan))
+        ]
+        if values:
+            mean, sd = _mean_sd(values)
+            availability_summary.append(
+                {"metric": metric, "mean": mean, "sd": sd, "n_folds": len(values)}
+            )
     _write_csv(os.path.join(output_dir, "per_fold_metrics.csv"), per_fold_rows)
+    _write_csv(
+        os.path.join(output_dir, "availability_only_diagnostics.csv"),
+        availability_diagnostics,
+    )
+    _write_csv(
+        os.path.join(output_dir, "availability_only_summary.csv"),
+        availability_summary,
+    )
+    _write_csv(
+        os.path.join(output_dir, "multimodal_full_comparability_audit.csv"),
+        comparison_audit_rows,
+    )
     _write_csv(os.path.join(output_dir, "site_holdout_baseline_summary.csv"), summary_rows)
     _write_latex(os.path.join(output_dir, "site_holdout_baseline_table.tex"), summary_rows)
+    _write_diagnostic_report(
+        os.path.join(output_dir, "gcn_gine_vs_full_diagnostic.md"),
+        summary_rows,
+        availability_summary,
+        comparison_audit_rows,
+    )
     _atomic_json(
         os.path.join(output_dir, "run_manifest.json"),
         {
             "site_cv_root": site_cv_root,
+            "full_model_root": full_model_root,
             "data_root": os.path.abspath(args.data_root),
             "data_csv": os.path.abspath(args.data_csv),
             "folds": args.folds,
@@ -1496,19 +1967,36 @@ def main():
             "elapsed_seconds": time.time() - started_at,
             "standard_deviation": "sample SD across outer folds (ddof=1)",
             "classification_policy": (
-                "Three-class metrics are emitted only when Control, PD, and Prodromal "
-                "are all represented in train, validation, and test."
+                "Three-class metrics are used when Control, PD, and Prodromal are all "
+                "represented in train, validation, and test. If Prodromal is absent "
+                "from every partition, binary Control-vs-PD metrics are used and marked "
+                "with a dagger in the LaTeX table."
             ),
             "multimodal_policy": (
                 "Naïve modality-specific encoders; missing modality embeddings are zero-filled; "
                 f"availability mask included={args.multimodal_missingness_mask}; no contrastive "
-                "alignment and no generative reconstruction."
+                "alignment and no generative reconstruction. Multimodal raw/full test-ID "
+                "hashes must match for every task and fold."
             ),
+            "availability_only_diagnostics": availability_diagnostics,
+            "availability_only_summary": availability_summary,
         },
     )
     print("\nAll requested runs completed.", flush=True)
     print(f"Summary CSV: {os.path.join(output_dir, 'site_holdout_baseline_summary.csv')}")
     print(f"LaTeX table: {os.path.join(output_dir, 'site_holdout_baseline_table.tex')}")
+    print(
+        "Comparability audit: "
+        f"{os.path.join(output_dir, 'multimodal_full_comparability_audit.csv')}"
+    )
+    print(
+        "Availability-only diagnostic: "
+        f"{os.path.join(output_dir, 'availability_only_diagnostics.csv')}"
+    )
+    print(
+        "Interpretation report: "
+        f"{os.path.join(output_dir, 'gcn_gine_vs_full_diagnostic.md')}"
+    )
 
 
 if __name__ == "__main__":
