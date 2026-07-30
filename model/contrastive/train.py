@@ -3,7 +3,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import argparse
 import os
+import random
 import time
+import numpy as np
 
 # Core components
 from dataset import MultiModalDataset, BrainGraphAugmentor, multimodal_collate
@@ -148,8 +150,15 @@ if __name__ == "__main__":
     
     parser.add_argument('--no_aug', action='store_true')
     parser.add_argument('--device', default='cpu')
+    parser.add_argument('--seed', type=int, default=42)
     
     args, _ = parser.parse_known_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # (Logic for loading train_ids remains same)
     train_ids = []

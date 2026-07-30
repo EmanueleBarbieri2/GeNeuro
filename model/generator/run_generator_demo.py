@@ -1,5 +1,7 @@
 import torch
 import os
+import random
+import numpy as np
 from collections import defaultdict
 from model.generator.generator import Generator
 
@@ -38,6 +40,7 @@ def main():
     parser.add_argument('--embeddings_path', required=True)
     parser.add_argument('--generator_ckpt', required=True)
     parser.add_argument('--device', default='cpu')
+    parser.add_argument('--seed', type=int, default=42)
     
     # --- NEW: Architectural Args to match checkpoint ---
     parser.add_argument('--hidden_dim', type=int, default=512)
@@ -48,6 +51,12 @@ def main():
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='Ignored locally, but prevents argparse crashes from orchestrator')
     
     args, unknown = parser.parse_known_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # 1. Load Real Data
     embeddings, labels, ids = load_embeddings(args.embeddings_path)

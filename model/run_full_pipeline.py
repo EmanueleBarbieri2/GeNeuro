@@ -244,7 +244,8 @@ def run_contrastive():
         '--encoders_path', ENCODER_CKPT,
         '--split_path', SPLIT_PATH,
         '--data_root', DATA_ROOT,
-        '--device', args.device
+        '--device', args.device,
+        '--seed', str(args.seed),
     ]
     if args.no_contrastive_aug: cmd.append('--no_aug')
     if args.exclude_modality:
@@ -274,7 +275,8 @@ def train_generator():
         '--num_registers', str(args.gen_num_registers),
         '--mlp_depth', str(args.gen_mlp_depth),
         '--dropout', str(args.gen_dropout),
-        '--device', args.device
+        '--device', args.device,
+        '--seed', str(args.seed),
     ]
     if args.exclude_modality:
         cmd.append('--exclude_modality')
@@ -293,7 +295,8 @@ def run_smart_reconstruction():
         '--num_layers', str(args.gen_num_layers),
         '--num_registers', str(args.gen_num_registers),
         '--mlp_depth', str(args.gen_mlp_depth),
-        '--device', args.device
+        '--device', args.device,
+        '--seed', str(args.seed),
     ]
     if args.exclude_modality:
         cmd.append('--exclude_modality')

@@ -143,6 +143,7 @@ if __name__ == "__main__":
     parser.add_argument('--lambd', type=float, default=0.001)
     parser.add_argument('--divergence', choices=['mmd', 'kl', 'none'], default='mmd')
     parser.add_argument('--device', default='cpu')
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--alpha', type=float, default=-5.0)
     parser.add_argument('--beta', type=float, default=5.0)
@@ -156,6 +157,12 @@ if __name__ == "__main__":
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='Ignored locally, but prevents argparse crashes from orchestrator')
     args, _ = parser.parse_known_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     train_ids, val_ids = load_split_ids(args.split_path)
     train_dataset = EmbeddingDataset(args.embeddings_path, train_ids)
