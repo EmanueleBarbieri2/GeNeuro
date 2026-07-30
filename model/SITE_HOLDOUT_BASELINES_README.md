@@ -15,12 +15,13 @@ The models are:
 
 All encoders are trained end-to-end from raw graphs for each downstream task.
 The baselines do not use contrastive alignment or generative reconstruction.
-The full-model row is read from maskless fold checkpoints. Before training,
-the runner verifies that its train/validation/test IDs exactly match the raw
-baseline fold files and that every downstream checkpoint records
-`use_missingness_mask=False`. For every fold and task, it also requires the
-naïve multimodal and full model to have identical test sample counts and
-SHA-256 hashes.
+If maskless full-model checkpoints are not supplied, the runner reuses each
+original fold's fixed `recon_demo.pt` and retrains only the downstream MLP/GRU
+heads without availability indicators. Contrastive alignment and the generator
+are not rerun. Before baseline training, it verifies that every downstream
+checkpoint records `use_missingness_mask=False`. For every fold and task, it
+also requires the naïve multimodal and full model to have identical test sample
+counts and SHA-256 hashes.
 
 MRI, fMRI, naïve multimodal, and full-model classification use Control, PD,
 and Prodromal. Because SPECT and DTI contain no observed Prodromal scans, those
@@ -38,7 +39,6 @@ nohup env \
   PYTHONUNBUFFERED=1 \
   .venv-uv/bin/python model/run_site_holdout_baselines.py \
   --site_cv_root model/logs/site_5fold_cv/site_5fold_seed42_20260724_170258 \
-  --full_model_root model/logs/site_5fold_cv/MASKLESS_FULL_MODEL_RUN \
   --data_root data \
   --data_csv data/PPMI_Curated_Data_Cut_Public_20251112.csv \
   --output_dir model/results/site_holdout_baselines_maskless_seed42 \
@@ -54,6 +54,12 @@ There are 125 baseline jobs by default: five baselines, five downstream tasks,
 and five outer folds. Each completed job writes a JSON result immediately.
 Restarting the same command automatically skips completed jobs. Use `--restart`
 only to intentionally retrain all requested jobs.
+
+Before those jobs, the first invocation trains the maskless full-model
+downstream heads under
+`OUTPUT_DIR/maskless_full_model/fold_N/checkpoints`. A resumed invocation skips
+folds whose five test checkpoints are already complete. Use
+`--retrain_full_heads` only to intentionally replace them.
 
 ## Outputs
 

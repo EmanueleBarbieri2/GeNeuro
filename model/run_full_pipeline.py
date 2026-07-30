@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument('--split_path', default=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'unified_split_master.txt')))
     parser.add_argument('--checkpoints_dir', default=os.path.abspath(os.path.join(os.path.dirname(__file__), 'checkpoints')))
     parser.add_argument('--device', default='cuda')
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument(
         '--reuse_representations_dir',
         help=(
@@ -312,7 +313,8 @@ def run_downstream(target_embeddings_path):
         '--embeddings_path', target_embeddings_path, 
         '--classifier_ckpt', os.path.join(CHECKPOINTS_DIR, 'classifier.pt'),
         '--split_path', DOWNSTREAM_SPLIT_PATH, 
-        '--device', args.device
+        '--device', args.device,
+        '--seed', str(args.seed),
     ]
     
     if getattr(args, 'drop_prodromal', False) or getattr(args, 'strict_downstream', False) or getattr(args, 'require_all_active', False):
@@ -346,7 +348,8 @@ def run_downstream(target_embeddings_path):
             '--hidden_dim', str(args.hidden_dim),
             '--embeddings_path', target_embeddings_path,
             '--split_path', DOWNSTREAM_SPLIT_PATH, 
-            '--device', args.device
+            '--device', args.device,
+            '--seed', str(args.seed),
         ])
         subprocess.run(cmd_prog, check=True, env=ENV)
     _record_timing('Stage 3.2 - Progression (both targets)', time.perf_counter() - t_prog)
@@ -363,7 +366,8 @@ def run_downstream(target_embeddings_path):
             '--csv_path', DATA_CSV,
             '--split_path', DOWNSTREAM_SPLIT_PATH, 
             '--embeddings_path', target_embeddings_path,
-            '--device', args.device
+            '--device', args.device,
+            '--seed', str(args.seed),
         ])
         subprocess.run(cmd_stat, check=True, env=ENV)
     _record_timing('Stage 3.3 - Static UPDRS (both targets)', time.perf_counter() - t_updrs)

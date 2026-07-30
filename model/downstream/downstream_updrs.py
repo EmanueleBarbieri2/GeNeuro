@@ -1,6 +1,8 @@
 import csv
 import os
 import argparse
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -215,11 +217,18 @@ def main():
     )
     parser.set_defaults(use_mask=True)
     parser.add_argument('--device', default='cuda')
+    parser.add_argument('--seed', type=int, default=42)
     
     # --- ABLATION FLAGS ---
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
     parser.add_argument('--disable_generator', action='store_true')
     args, _ = parser.parse_known_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 

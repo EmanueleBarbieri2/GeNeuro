@@ -6,6 +6,8 @@ from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 import os
 import csv
 import argparse
+import random
+import numpy as np
 from collections import defaultdict
 
 TARGETS = ["updrs1_score", "updrs2_score", "updrs3_score", "updrs4_score"]
@@ -151,11 +153,18 @@ def main():
     )
     parser.set_defaults(use_mask=True)
     parser.add_argument('--device', default='cuda')
+    parser.add_argument('--seed', type=int, default=42)
     
     # --- ABLATION FLAGS ---
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
     parser.add_argument('--disable_generator', action='store_true')
     args, _ = parser.parse_known_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # Tracker Variables
     best_state = None

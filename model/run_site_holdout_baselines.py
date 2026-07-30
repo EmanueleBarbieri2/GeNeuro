@@ -9,6 +9,8 @@ import json
 import math
 import os
 import random
+import shutil
+import subprocess
 import sys
 import time
 import warnings
@@ -1346,6 +1348,85 @@ def _load_full_model_result(
     }
 
 
+def _maskless_full_heads_ready(checkpoints_dir):
+    for filename in FULL_MODEL_FILES.values():
+        path = os.path.join(checkpoints_dir, filename)
+        if not os.path.exists(path):
+            return False
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("evaluation_split") != "test"
+            or payload.get("use_missingness_mask") is not False
+            or not isinstance(payload.get("metrics"), dict)
+        ):
+            return False
+    return True
+
+
+def _prepare_maskless_full_model_root(source_fold_dirs, target_root, args):
+    pipeline_path = os.path.join(PROJECT_DIR, "model", "run_full_pipeline.py")
+    print(
+        "No --full_model_root supplied; preparing maskless full-model downstream "
+        f"heads in {target_root}.",
+        flush=True,
+    )
+    for fold in args.folds:
+        source = source_fold_dirs[fold]
+        source_checkpoints = os.path.join(source["fold_dir"], "checkpoints")
+        reconstruction_path = os.path.join(source_checkpoints, "recon_demo.pt")
+        if not os.path.exists(reconstruction_path):
+            raise FileNotFoundError(
+                f"Cannot reuse full-model representations for fold {fold}: "
+                f"{reconstruction_path}"
+            )
+        target_fold = os.path.join(target_root, f"fold_{fold}")
+        target_checkpoints = os.path.join(target_fold, "checkpoints")
+        target_split = os.path.join(target_fold, "site_grouped_split.txt")
+        os.makedirs(target_checkpoints, exist_ok=True)
+        shutil.copy2(source["split_path"], target_split)
+        if _maskless_full_heads_ready(target_checkpoints) and not args.retrain_full_heads:
+            print(f"  fold {fold}: resumed completed maskless full heads", flush=True)
+            continue
+        print(
+            f"\n{'=' * 72}\n"
+            f"Preparing maskless full-model downstream heads: fold {fold}/{len(args.folds)}",
+            flush=True,
+        )
+        command = [
+            sys.executable,
+            pipeline_path,
+            "--data_csv",
+            os.path.abspath(args.data_csv),
+            "--split_path",
+            target_split,
+            "--checkpoints_dir",
+            target_checkpoints,
+            "--reuse_representations_dir",
+            source_checkpoints,
+            "--no_missingness_mask",
+            "--device",
+            args.device,
+            "--seed",
+            str(args.seed + fold),
+            "--cls_epochs",
+            str(args.full_cls_epochs),
+            "--prog_epochs",
+            str(args.full_prog_epochs),
+            "--updrs_epochs",
+            str(args.full_updrs_epochs),
+            "--downstream_lr",
+            str(args.full_downstream_lr),
+        ]
+        subprocess.run(command, cwd=PROJECT_DIR, check=True)
+        if not _maskless_full_heads_ready(target_checkpoints):
+            raise RuntimeError(
+                f"Fold {fold} finished without a complete set of maskless test "
+                f"checkpoints in {target_checkpoints}"
+            )
+    return target_root
+
+
 def _mean_sd(values):
     array = np.asarray(values, dtype=float)
     return float(np.mean(array)), float(np.std(array, ddof=1)) if len(array) > 1 else 0.0
@@ -1619,8 +1700,9 @@ def parse_args():
         "--full_model_root",
         default=None,
         help=(
-            "Fold root containing the full-model checkpoints/recon_demo.pt to compare. "
-            "Defaults to --site_cv_root; its splits must exactly match."
+            "Optional fold root containing already-trained maskless full-model "
+            "downstream checkpoints. If omitted, they are trained automatically "
+            "from the fixed representations under --site_cv_root."
         ),
     )
     parser.add_argument(
@@ -1660,6 +1742,15 @@ def parse_args():
     parser.add_argument("--edge_threshold", type=float, default=0.0)
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--label_smoothing", type=float, default=0.1)
+    parser.add_argument("--full_cls_epochs", type=int, default=100)
+    parser.add_argument("--full_prog_epochs", type=int, default=100)
+    parser.add_argument("--full_updrs_epochs", type=int, default=100)
+    parser.add_argument("--full_downstream_lr", type=float, default=0.01)
+    parser.add_argument(
+        "--retrain_full_heads",
+        action="store_true",
+        help="Retrain maskless full-model downstream heads even if complete checkpoints exist.",
+    )
     parser.add_argument(
         "--multimodal_missingness_mask",
         action=argparse.BooleanOptionalAction,
@@ -1683,10 +1774,19 @@ def parse_args():
 def main():
     args = parse_args()
     site_cv_root = os.path.abspath(args.site_cv_root)
-    full_model_root = os.path.abspath(args.full_model_root or args.site_cv_root)
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     fold_dirs = _find_fold_dirs(site_cv_root, args.folds)
+    if args.full_model_root:
+        full_model_root = os.path.abspath(args.full_model_root)
+    elif args.include_full_model:
+        full_model_root = _prepare_maskless_full_model_root(
+            fold_dirs,
+            os.path.join(output_dir, "maskless_full_model"),
+            args,
+        )
+    else:
+        full_model_root = site_cv_root
     full_fold_dirs = _find_fold_dirs(full_model_root, args.folds)
     graph_store = GraphStore(args.data_root, cache=not args.no_cache_graphs)
     visit_sites = _load_site_metadata(args.data_csv)
@@ -1735,7 +1835,7 @@ def main():
                 "the comparison would not use the same splits."
             )
         reconstruction_path = os.path.join(
-            full_fold_dirs[fold]["fold_dir"], "checkpoints", "recon_demo.pt"
+            fold_dirs[fold]["fold_dir"], "checkpoints", "recon_demo.pt"
         )
         reconstruction_ids = _load_reconstruction_ids(reconstruction_path)
         split_infos[fold]["full_model_available_ids"] = reconstruction_ids
