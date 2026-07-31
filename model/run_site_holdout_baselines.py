@@ -1194,7 +1194,7 @@ def _run_one(
     configuration = BASELINES[baseline]
     modalities = configuration["modalities"]
     eligible_ids = (
-        split_info.get("full_model_available_ids")
+        split_info.get("raw_multimodal_ids")
         if baseline == "multimodal"
         else None
     )
@@ -1822,6 +1822,12 @@ def main():
             "patients": patients,
             "visit_partition": visit_partition,
             "patient_partition": patient_partition,
+            "raw_multimodal_ids": {
+                visit_id
+                for partition in PARTITIONS
+                for visit_id in partitions[partition]
+                if graph_store.any(MODALITIES, visit_id)
+            },
         }
         full_partitions, _, _, _, _ = _load_split(
             full_fold_dirs[fold]["split_path"]
@@ -1835,7 +1841,7 @@ def main():
                 "the comparison would not use the same splits."
             )
         reconstruction_path = os.path.join(
-            fold_dirs[fold]["fold_dir"], "checkpoints", "recon_demo.pt"
+            full_fold_dirs[fold]["fold_dir"], "checkpoints", "recon_demo.pt"
         )
         reconstruction_ids = _load_reconstruction_ids(reconstruction_path)
         split_infos[fold]["full_model_available_ids"] = reconstruction_ids
@@ -1916,6 +1922,15 @@ def main():
                 if os.path.exists(result_path) and not args.restart:
                     with open(result_path, encoding="utf-8") as handle:
                         result = json.load(handle)
+                    if (
+                        result.get("initialization") != "random_from_scratch"
+                        or result.get("pretrained_weights_loaded") is not False
+                    ):
+                        raise ValueError(
+                            "Refusing to resume a result without verified "
+                            f"from-scratch provenance: {result_path}. Use a new "
+                            "--output_dir or --restart."
+                        )
                     if result.get("multimodal_missingness_mask") != args.multimodal_missingness_mask:
                         raise ValueError(
                             f"Stale result has a different missingness-mask policy: "
@@ -1947,6 +1962,10 @@ def main():
                             "baseline": baseline,
                             "modalities": list(BASELINES[baseline]["modalities"]),
                             "seed": _stable_seed(args.seed, fold, baseline, task),
+                            "initialization": "random_from_scratch",
+                            "pretrained_weights_loaded": False,
+                            "weights_shared_with_other_baselines": False,
+                            "optimizer_state_loaded": False,
                             "elapsed_seconds": time.time() - run_started,
                             "split_path": fold_dirs[fold]["split_path"],
                             "multimodal_missingness_mask": args.multimodal_missingness_mask,
@@ -2077,6 +2096,13 @@ def main():
                 f"availability mask included={args.multimodal_missingness_mask}; no contrastive "
                 "alignment and no generative reconstruction. Multimodal raw/full test-ID "
                 "hashes must match for every task and fold."
+            ),
+            "baseline_initialization_policy": (
+                "Every fold x baseline x downstream-task run constructs new randomly "
+                "initialized encoder and head modules. No pretrained weights, optimizer "
+                "state, embeddings, reconstructions, or parameters from another baseline "
+                "are loaded. The best validation state restored before test evaluation "
+                "belongs only to that same training run."
             ),
             "availability_only_diagnostics": availability_diagnostics,
             "availability_only_summary": availability_summary,

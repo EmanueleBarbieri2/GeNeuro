@@ -1,5 +1,9 @@
 # Legacy representation-level site-held-out experiment
 
+> This is an ablation/legacy-reproduction utility, not the independent GNN
+> baseline benchmark. For independent randomly initialized raw-graph baselines,
+> use `run_site_holdout_end_to_end_benchmark.py`.
+
 `run_site_holdout_legacy_representation_baselines.py` reproduces the historical
 downstream baseline protocol on the existing site-held-out folds.
 
