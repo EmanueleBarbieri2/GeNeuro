@@ -9,6 +9,12 @@ This repository contains an end-to-end research pipeline for learning multimodal
 - Stage 2 — Generative reconstruction: a generative model learns to reconstruct missing modalities from embeddings.
 - Stage 3 — Granular downstream tasks: classification, longitudinal progression modeling, and static clinical score (UPDRS) prediction using learned or reconstructed embeddings.
 
+The repository also includes a separate ADNI classification-only path for the
+paired AAL90 fMRI and DTI connectomes. See
+[`model/adni/README.md`](model/adni/README.md). This path uses three diagnoses
+(Alzheimer's disease, mild cognitive impairment, and normal control) and does
+not invoke the PPMI clinical-regression or longitudinal stages.
+
 The codebase is organized to run either a single end-to-end pipeline or a 5-fold cross-validation orchestration.
 
 
@@ -64,4 +70,3 @@ python model/run_full_pipeline.py \
 ```bash
 python model/run_5fold_cv.py --device cuda --logs_dir model/logs/cv_demo
 ```
-
