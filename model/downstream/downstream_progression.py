@@ -38,7 +38,8 @@ def load_csv_visits(csv_path):
     return visits
 
 class SmartSequenceDataset(Dataset):
-    def __init__(self, embeddings_path, visits_by_patno, active_mods, use_mask=True, zero_impute=False):
+    def __init__(self, embeddings_path, visits_by_patno, active_mods, use_mask=True,
+                 zero_impute=False, observed_only_pooling=False):
         self.samples = []
         data = torch.load(embeddings_path, map_location="cpu")
         is_raw = "embeddings" in data and "labels" in data and "ids" in data
@@ -59,9 +60,23 @@ class SmartSequenceDataset(Dataset):
                 vid = v["key"]
                 
                 if is_raw:
-                    # --- ZERO IMPUTATION LOGIC ---
+                    # --- RAW OBSERVED-EMBEDDING FUSION ---
                     if vid not in pt_data: continue
                     patient_mods = pt_data[vid]
+
+                    if observed_only_pooling:
+                        observed = [
+                            patient_mods[m].flatten()
+                            for m in active_mods
+                            if m in patient_mods
+                        ]
+                        if not observed:
+                            continue
+                        feat = torch.stack(observed, dim=0).mean(dim=0)
+                        seq_feat.append(feat)
+                        valid_visits.append(v)
+                        continue
+
                     feat_list, mask_list = [], []
                     
                     for m in active_mods:
@@ -79,6 +94,11 @@ class SmartSequenceDataset(Dataset):
                     valid_visits.append(v)
                     
                 else:
+                    if observed_only_pooling:
+                        raise ValueError(
+                            "--observed_only_pooling requires raw embeddings.pt and cannot be "
+                            "combined with reconstructed representations."
+                        )
                     # --- HYBRID RECONSTRUCTION LOGIC ---
                     if vid not in data: continue
                     entry = data[vid]
@@ -158,7 +178,20 @@ def main():
     # --- ABLATION FLAGS ---
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
     parser.add_argument('--disable_generator', action='store_true')
+    parser.add_argument(
+        '--observed_only_pooling',
+        action='store_true',
+        help=(
+            'Mean-pool only genuinely observed modality embeddings at each visit; '
+            'requires --disable_generator and --no_missingness_mask.'
+        ),
+    )
     args, _ = parser.parse_known_args()
+
+    if args.observed_only_pooling and not args.disable_generator:
+        parser.error('--observed_only_pooling requires --disable_generator.')
+    if args.observed_only_pooling and args.use_mask:
+        parser.error('--observed_only_pooling requires --no_missingness_mask.')
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -198,11 +231,14 @@ def main():
                     elif mode == 'test': test_pts.add(patient)
 
     t_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in train_pts}, 
-                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator,
+                                observed_only_pooling=args.observed_only_pooling)
     v_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in val_pts}, 
-                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+                                active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator,
+                                observed_only_pooling=args.observed_only_pooling)
     test_ds = SmartSequenceDataset(args.embeddings_path, {p: v for p, v in visits.items() if p in test_pts},
-                                   active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator)
+                                   active_mods, use_mask=args.use_mask, zero_impute=args.disable_generator,
+                                   observed_only_pooling=args.observed_only_pooling)
     
     if len(t_ds) == 0:
         print("❌ Error: Progression Dataset is empty after filtering.")
@@ -216,7 +252,8 @@ def main():
     print(
         f"🚀 GRU Sequence Forecaster | Input Dim: {input_dim} | "
         f"Target: {TARGETS[args.target_idx]} | "
-        f"Missingness mask: {'included' if args.use_mask else 'excluded'}"
+        f"Missingness mask: {'included' if args.use_mask else 'excluded'} | "
+        f"Fusion: {'observed-only mean' if args.observed_only_pooling else 'concatenation'}"
     )
     
     model = ForecastingGRU(input_dim=input_dim, hidden_dim=args.hidden_dim).to(device)
@@ -309,6 +346,9 @@ def main():
             "metrics": reported_metrics,
             "evaluation_split": "test" if len(test_ds) else "validation",
             "use_missingness_mask": args.use_mask,
+            "fusion_strategy": (
+                "observed_only_mean" if args.observed_only_pooling else "concatenation"
+            ),
         }, args.progression_ckpt)
         print(f"✅ Saved best GRU sequence model to {args.progression_ckpt}")
 

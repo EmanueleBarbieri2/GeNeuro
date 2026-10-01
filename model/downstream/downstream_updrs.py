@@ -26,7 +26,8 @@ def load_csv_targets(csv_path):
     return targets
 
 class SmartUpdrsDataset(Dataset):
-    def __init__(self, embeddings_path, targets_dict, active_mods, use_mask=True, zero_impute=False):
+    def __init__(self, embeddings_path, targets_dict, active_mods, use_mask=True,
+                 zero_impute=False, observed_only_pooling=False):
         self.samples = []
         # Load to CPU to keep VRAM clear for training
         data = torch.load(embeddings_path, map_location="cpu")
@@ -35,7 +36,7 @@ class SmartUpdrsDataset(Dataset):
         is_raw = "embeddings" in data and "labels" in data and "ids" in data
         
         if is_raw:
-            # --- ZERO IMPUTATION LOGIC (Ablation: No Generator) ---
+            # --- RAW OBSERVED-EMBEDDING FUSION (Ablation: No Generator) ---
             pt_data = {}
             for i, (emb, label, pid) in enumerate(zip(data["embeddings"], data["labels"], data["ids"])):
                 if pid not in pt_data: pt_data[pid] = {}
@@ -45,6 +46,19 @@ class SmartUpdrsDataset(Dataset):
                 if key not in pt_data: continue
                 
                 patient_mods = pt_data[key]
+
+                if observed_only_pooling:
+                    observed = [
+                        patient_mods[m].flatten()
+                        for m in active_mods
+                        if m in patient_mods
+                    ]
+                    if not observed:
+                        continue
+                    x = torch.stack(observed, dim=0).mean(dim=0)
+                    self.samples.append((key, x, target))
+                    continue
+
                 feat_list = []
                 mask_list = []
                 
@@ -65,6 +79,11 @@ class SmartUpdrsDataset(Dataset):
                 self.samples.append((key, x, target))
                 
         else:
+            if observed_only_pooling:
+                raise ValueError(
+                    "--observed_only_pooling requires raw embeddings.pt and cannot be "
+                    "combined with reconstructed representations."
+                )
             # --- HYBRID RECONSTRUCTION LOGIC (Standard Pipeline) ---
             for key, target in targets_dict.items():
                 if key not in data: continue
@@ -222,7 +241,20 @@ def main():
     # --- ABLATION FLAGS ---
     parser.add_argument('--exclude_modality', nargs='+', default=None, help='List of modalities to exclude')
     parser.add_argument('--disable_generator', action='store_true')
+    parser.add_argument(
+        '--observed_only_pooling',
+        action='store_true',
+        help=(
+            'Mean-pool only genuinely observed modality embeddings at each visit; '
+            'requires --disable_generator and --no_missingness_mask.'
+        ),
+    )
     args, _ = parser.parse_known_args()
+
+    if args.observed_only_pooling and not args.disable_generator:
+        parser.error('--observed_only_pooling requires --disable_generator.')
+    if args.observed_only_pooling and args.use_mask:
+        parser.error('--observed_only_pooling requires --no_missingness_mask.')
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -257,7 +289,8 @@ def main():
     targets = load_csv_targets(args.csv_path)
     full_dataset = SmartUpdrsDataset(
         args.embeddings_path, targets, active_mods, 
-        use_mask=args.use_mask, zero_impute=args.disable_generator
+        use_mask=args.use_mask, zero_impute=args.disable_generator,
+        observed_only_pooling=args.observed_only_pooling,
     )
     
     if len(full_dataset) == 0:
@@ -279,7 +312,8 @@ def main():
     input_dim = full_dataset[0][0].shape[0] if len(full_dataset) > 0 else 4100
     print(
         f"🚀 UPDRS Regressor | Dim: {input_dim} | Target: {TARGETS[args.target_idx]} | "
-        f"Missingness mask: {'included' if args.use_mask else 'excluded'}"
+        f"Missingness mask: {'included' if args.use_mask else 'excluded'} | "
+        f"Fusion: {'observed-only mean' if args.observed_only_pooling else 'concatenation'}"
     )
     
     raw_model = Regressor(input_dim, dropout=args.dropout).to(device)
@@ -313,6 +347,9 @@ def main():
             "metrics": reported_metrics,
             "evaluation_split": "test" if test_idx else "validation",
             "use_missingness_mask": args.use_mask,
+            "fusion_strategy": (
+                "observed_only_mean" if args.observed_only_pooling else "concatenation"
+            ),
         }, args.updrs_ckpt)
         print(f"✅ Saved best regressor to {args.updrs_ckpt}")
     

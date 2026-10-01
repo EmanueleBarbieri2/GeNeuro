@@ -188,18 +188,21 @@ def _latex_metric(payload: dict) -> str:
     return f"${payload['mean']:.4f} \\pm {payload['std']:.4f}$"
 
 
-def _condition_label(condition: str) -> str:
-    return {
+def _condition_label(condition: str, configuration=None) -> str:
+    label = {
         "full": "MINERVA (Full)",
         "no_cl": "MINERVA (No CL)",
         "no_gr": "MINERVA (No GR)",
     }[condition]
+    if condition == "no_gr" and bool((configuration or {}).get("observed_only_pooling")):
+        return "MINERVA (No GR, observed only)"
+    return label
 
 
 def _summary_row(condition: dict) -> dict:
     row = {
         "condition": condition["condition"],
-        "model": _condition_label(condition["condition"]),
+        "model": _condition_label(condition["condition"], condition["configuration"]),
         "modality": "Multi",
     }
     for name in OUTPUT_METRICS:
@@ -235,7 +238,10 @@ def _write_markdown(path: Path, conditions: list[dict]) -> None:
     lines = ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     for condition in conditions:
         aggregate = condition["aggregate"]
-        values = [_condition_label(condition["condition"]), "Multi"]
+        values = [
+            _condition_label(condition["condition"], condition["configuration"]),
+            "Multi",
+        ]
         values.extend(_format_metric(aggregate[name]) for name in OUTPUT_METRICS)
         lines.append("| " + " | ".join(values) + " |")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -258,7 +264,7 @@ def _write_latex(path: Path, conditions: list[dict]) -> None:
         aggregate = condition["aggregate"]
         values = [_latex_metric(aggregate[name]) for name in OUTPUT_METRICS]
         lines.append(
-            f"{_condition_label(condition['condition'])} & Multi & "
+            f"{_condition_label(condition['condition'], condition['configuration'])} & Multi & "
             + " & ".join(values)
             + r" \\"
         )

@@ -3,6 +3,8 @@
 
 Both conditions are launched through ``run_5fold_site_cv.py`` with identical
 data, split seed, hyperparameters, and no observed/generated modality flag.
+By default, No-GR mean-pools only genuinely observed embeddings instead of
+zero-filling unavailable modality slots.
 After training, the suite validates and aggregates untouched-test metrics into
 the paper table requested by ``aggregate_site_holdout_ablations.py``.
 """
@@ -42,6 +44,16 @@ def _parse_args():
     parser.add_argument("--prog_epochs", type=int, default=100)
     parser.add_argument("--updrs_epochs", type=int, default=100)
     parser.add_argument("--downstream_lr", type=float, default=0.01)
+    parser.add_argument(
+        "--no_gr_strategy",
+        choices=("observed_only", "zero_fill"),
+        default="observed_only",
+        help=(
+            "Fusion used by the No-GR condition. observed_only mean-pools only "
+            "available contrastive embeddings and is the manuscript default; "
+            "zero_fill retains the legacy diagnostic."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -105,19 +117,24 @@ def main():
     suite_dir.mkdir()
 
     condition_flags = {
-        "no_cl": "--skip_cl",
-        "no_gr": "--disable_generator",
+        "no_cl": ["--skip_cl"],
+        "no_gr": ["--disable_generator"],
     }
+    if args.no_gr_strategy == "observed_only":
+        condition_flags["no_gr"].append("--observed_only_pooling")
     completed = {}
     commands = {}
     try:
-        for condition, flag in condition_flags.items():
+        for condition, flags in condition_flags.items():
             condition_dir = output_root / condition
             condition_dir.mkdir(exist_ok=True)
             before = {path.resolve() for path in condition_dir.glob("site_5fold_seed*")}
-            command = _base_command(args, condition_dir) + [flag]
+            command = _base_command(args, condition_dir) + flags
             commands[condition] = command
-            print(f"\n{'=' * 80}\nCondition: {condition} ({flag})", flush=True)
+            print(
+                f"\n{'=' * 80}\nCondition: {condition} ({' '.join(flags)})",
+                flush=True,
+            )
             _run(command)
             completed[condition] = _new_run(condition_dir, before)
 

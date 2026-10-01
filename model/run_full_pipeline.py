@@ -30,6 +30,14 @@ def parse_args():
     parser.add_argument('--skip_cl', action='store_true')
     parser.add_argument('--disable_generator', action='store_true')
     parser.add_argument(
+        '--observed_only_pooling',
+        action='store_true',
+        help=(
+            'With --disable_generator, mean-pool only observed modality embeddings '
+            'instead of zero-filling missing modality slots.'
+        ),
+    )
+    parser.add_argument(
         '--no_missingness_mask',
         action='store_true',
         help='Train all downstream heads without the observed/reconstructed modality indicators.',
@@ -38,7 +46,7 @@ def parse_args():
     
     # 🌟 NEW: Autonomous Ablation Routing Flags
     parser.add_argument('--ablate_modality', type=str, choices=['fMRI', 'DTI', 'MRI', 'SPECT'], help="Modality to partially mask out downstream")
-    parser.add_argument('--ablate_ratio', type=float, help="Percentage to KEEP (e.g., 0.1 for 10%)")
+    parser.add_argument('--ablate_ratio', type=float, help="Percentage to KEEP (e.g., 0.1 for 10%%)")
     
     # --- Strict Mode Flags ---
     parser.add_argument('--require_all_active', action='store_true', help="Only train/eval on subjects possessing ALL active modalities")
@@ -88,6 +96,11 @@ def parse_args():
     return parser.parse_args()
 
 args = parse_args()
+
+if args.observed_only_pooling and not args.disable_generator:
+    raise SystemExit('--observed_only_pooling requires --disable_generator.')
+if args.observed_only_pooling and not args.no_missingness_mask:
+    raise SystemExit('--observed_only_pooling requires --no_missingness_mask.')
 
 # --- Path Management ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -204,6 +217,8 @@ def build_cmd(base_cmd):
         base_cmd.append('--disable_generator')
     if args.no_missingness_mask:
         base_cmd.append('--no_missingness_mask')
+    if args.observed_only_pooling:
+        base_cmd.append('--observed_only_pooling')
     return base_cmd
 
 def run_contrastive():

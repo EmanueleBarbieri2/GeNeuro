@@ -40,7 +40,9 @@ def load_csv_labels(csv_path, drop_prodromal=False):
 
 class SmartClassDataset(Dataset):
     # 🌟 ADDED: ablate_modality and ablate_ratio to init signature
-    def __init__(self, embeddings_path, labels_dict, active_mods, class_names, use_mask=True, zero_impute=False, ablate_modality=None, ablate_ratio=None):
+    def __init__(self, embeddings_path, labels_dict, active_mods, class_names, use_mask=True,
+                 zero_impute=False, observed_only_pooling=False, ablate_modality=None,
+                 ablate_ratio=None):
         self.samples = []
         data = torch.load(embeddings_path, map_location="cpu")
         
@@ -57,6 +59,24 @@ class SmartClassDataset(Dataset):
                 if key not in pt_data: continue
                 
                 patient_mods = pt_data[key]
+
+                if observed_only_pooling:
+                    observed_mods = [m for m in active_mods if m in patient_mods]
+                    if ablate_modality in observed_mods and ablate_ratio is not None:
+                        if np.random.rand() > ablate_ratio:
+                            observed_mods.remove(ablate_modality)
+                    if not observed_mods:
+                        continue
+                    # Contrastive alignment puts every modality in the same
+                    # embedding space. Mean pooling consumes only genuinely
+                    # observed embeddings, has a fixed width, and does not
+                    # encode the number of available modalities by magnitude.
+                    x = torch.stack(
+                        [patient_mods[m].flatten() for m in observed_mods], dim=0
+                    ).mean(dim=0)
+                    self.samples.append((key, class_names.index(label), x))
+                    continue
+
                 feat_list, mask_list = [], []
                 
                 for m in active_mods:
@@ -80,6 +100,11 @@ class SmartClassDataset(Dataset):
                 self.samples.append((key, class_names.index(label), x))
                 
         else:
+            if observed_only_pooling:
+                raise ValueError(
+                    "--observed_only_pooling requires raw embeddings.pt and cannot be "
+                    "combined with reconstructed representations."
+                )
             for key, label in labels_dict.items():
                 if key not in data: continue
                 
@@ -184,6 +209,14 @@ def main():
     
     parser.add_argument('--exclude_modality', nargs='+', default=None)
     parser.add_argument('--disable_generator', action='store_true')
+    parser.add_argument(
+        '--observed_only_pooling',
+        action='store_true',
+        help=(
+            'Mean-pool only genuinely observed modality embeddings at each visit; '
+            'requires --disable_generator and --no_missingness_mask.'
+        ),
+    )
     parser.add_argument('--drop_prodromal', action='store_true', help="Convert to Binary PD vs Control")
     
     # 🌟 ADDED: The required arguments to accept commands from the orchestrator
@@ -191,6 +224,11 @@ def main():
     parser.add_argument('--ablate_ratio', type=float)
     
     args = parser.parse_args()
+
+    if args.observed_only_pooling and not args.disable_generator:
+        parser.error('--observed_only_pooling requires --disable_generator.')
+    if args.observed_only_pooling and args.use_mask:
+        parser.error('--observed_only_pooling requires --no_missingness_mask.')
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -231,6 +269,7 @@ def main():
     full_dataset = SmartClassDataset(
         args.embeddings_path, labels, active_mods, class_names=current_class_names,
         use_mask=args.use_mask, zero_impute=args.disable_generator,
+        observed_only_pooling=args.observed_only_pooling,
         ablate_modality=args.ablate_modality, ablate_ratio=args.ablate_ratio
     )
     
@@ -265,7 +304,8 @@ def main():
     input_dim = full_dataset[0][0].shape[0]
     print(
         f"🚀 Classifier Running on {device} | Input Dim: {input_dim} | "
-        f"Classes: {num_classes} | Missingness mask: {'included' if args.use_mask else 'excluded'}"
+        f"Classes: {num_classes} | Missingness mask: {'included' if args.use_mask else 'excluded'} | "
+        f"Fusion: {'observed-only mean' if args.observed_only_pooling else 'concatenation'}"
     )
     
     model = Classifier(input_dim, num_classes=num_classes, dropout=args.dropout).to(device)
@@ -320,6 +360,9 @@ def main():
             "metrics": reported_metrics,
             "evaluation_split": "test" if test_idx else "validation",
             "use_missingness_mask": args.use_mask,
+            "fusion_strategy": (
+                "observed_only_mean" if args.observed_only_pooling else "concatenation"
+            ),
         }, args.classifier_ckpt)
         print(f"✅ Saved weights to {args.classifier_ckpt}")
 
